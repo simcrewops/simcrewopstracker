@@ -6,10 +6,11 @@ const state = {
   tracking:        false,
   phase:           'idle',
   lastData:        null,
-  routePoints:     [],
+  routePoints:     [],     // capped at 50 by main process
   takeoffTime:     null,
   timerInterval:   null,
   pendingFlight:   null,   // completed flight awaiting submit
+  performanceMode: false,
 };
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -317,6 +318,30 @@ function updateMetrics(d) {
   lastUpdate.textContent = `Updated ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' })}`;
 }
 
+// ── Performance mode ────────────────────────────────────────────────────────
+function applyPerformanceMode(enabled) {
+  state.performanceMode = enabled;
+  const mapCard = $('lower-grid').firstElementChild; // map card
+  if (enabled) {
+    mapCard.style.display = 'none';
+    // Show a pill in the bottom bar if not already there
+    if (!$('perf-mode-indicator')) {
+      const pill = document.createElement('div');
+      pill.id = 'perf-mode-indicator';
+      pill.className = 'status-pill';
+      pill.style.borderColor = 'rgba(59,130,246,0.3)';
+      pill.style.background  = 'var(--blue-dim)';
+      pill.style.color       = '#93c5fd';
+      pill.innerHTML = '<span class="status-dot" style="background:var(--blue)"></span>⚡ Performance Mode';
+      $('bottom-left').appendChild(pill);
+    }
+  } else {
+    mapCard.style.display = '';
+    const pill = $('perf-mode-indicator');
+    if (pill) pill.remove();
+  }
+}
+
 // ── Settings panel ─────────────────────────────────────────────────────────
 const settingsOverlay = $('settings-overlay');
 
@@ -326,6 +351,7 @@ async function openSettings() {
   $('inp-api-token').value = s.apiToken || '';
   $('chk-auto-connect').checked = !!s.autoConnect;
   $('chk-tray').checked         = !!s.minimizeToTray;
+  $('chk-perf-mode').checked    = !!s.performanceMode;
   $('verify-status').style.display = 'none';
   settingsOverlay.classList.add('open');
 }
@@ -335,15 +361,18 @@ function closeSettings() {
 }
 
 async function saveSettings() {
+  const perfMode = $('chk-perf-mode').checked;
   const settings = {
-    apiUrl:         $('inp-api-url').value.trim(),
-    apiToken:       $('inp-api-token').value.trim(),
-    autoConnect:    $('chk-auto-connect').checked,
-    minimizeToTray: $('chk-tray').checked,
+    apiUrl:          $('inp-api-url').value.trim(),
+    apiToken:        $('inp-api-token').value.trim(),
+    autoConnect:     $('chk-auto-connect').checked,
+    minimizeToTray:  $('chk-tray').checked,
+    performanceMode: perfMode,
   };
   await window.tracker.saveSettings(settings);
+  applyPerformanceMode(perfMode);
   closeSettings();
-  addEvent('info', 'Settings saved');
+  addEvent('info', perfMode ? 'Settings saved — Performance Mode ON' : 'Settings saved');
 }
 
 async function verifyToken() {
@@ -540,26 +569,24 @@ $('btn-close').addEventListener('click',    () => window.tracker.closeWindow());
 
 // ── Initialization ─────────────────────────────────────────────────────────
 async function init() {
-  // Detect platform
   if (navigator.platform.toLowerCase().includes('mac')) {
     document.body.classList.add('is-mac');
   }
 
-  // Load initial app state
   const appState = await window.tracker.getState();
-  if (appState.simConnected) {
-    setSimStatus('connected');
+
+  if (appState.simConnected) setSimStatus('connected');
+
+  // Apply stored performance mode immediately so map is hidden from first paint
+  if (appState.settings?.performanceMode) {
+    applyPerformanceMode(true);
   }
 
-  // Version
   const version = await window.tracker.getVersion();
   versionTag.textContent = `v${version}`;
 
-  // Resize canvas
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
-
-  // Initial draw
   drawMap();
 }
 

@@ -4,149 +4,151 @@
  * SimConnect Manager
  *
  * Wraps node-simconnect to read live flight data from MSFS 2020/2024.
- * Emits 'connected', 'disconnected', 'error', and 'data' events.
  *
- * node-simconnect only works on Windows with MSFS running.
- * On other platforms or when MSFS is not running, connection attempts fail
- * gracefully and the manager emits an 'error' event.
+ * Adaptive polling: the caller can call setPollingInterval(seconds) to adjust
+ * how often SimConnect delivers data frames. Critical phases (takeoff/landing)
+ * use 1s; cruise uses 3s; idle/parked can use 10s. This reduces the callback
+ * rate from the sim process and cuts IPC + CPU overhead while MSFS is running.
+ *
+ * Memory: each data frame is ~200 bytes; we never accumulate them.
  */
 
 const { EventEmitter } = require('events');
 
-// SimConnect data definition ID
-const DEF_ID = 0;
-// SimConnect request IDs
-const REQ_ID_PERIODIC = 0;
-const REQ_ID_ONCE     = 1;
+const DEF_ID           = 0;
+const REQ_ID_PERIODIC  = 0;
+const RECONNECT_DELAY  = 5000;
 
-// Reconnect delay in ms
-const RECONNECT_DELAY = 5000;
+// Polling seconds → SimConnect interval param (SECOND period = 1Hz base).
+// interval=0 → every second, interval=N → every (N+1) seconds.
+function secondsToInterval(s) {
+  return Math.max(0, Math.round(s) - 1);
+}
 
 class SimConnectManager extends EventEmitter {
   constructor() {
     super();
-    this._handle       = null;
-    this._connected    = false;
-    this._reconnecting = false;
-    this._stopReconnect = false;
+    this._handle          = null;
+    this._connected       = false;
+    this._stopReconnect   = false;
+    this._pollSeconds     = 1;        // current target
+    this._activePollSecs  = null;     // what SimConnect is actually set to
+    this._SimConnectPeriod = null;    // cached after first connect
   }
 
-  isConnected() {
-    return this._connected;
+  isConnected() { return this._connected; }
+
+  /**
+   * Change how often SimConnect delivers data.
+   * Safe to call at any time; no-op if already at the requested interval.
+   *
+   * Recommended intervals by phase:
+   *   idle / pre_flight / post_flight : 10s
+   *   taxi                            : 3s
+   *   climb / cruise / descent        : 3s
+   *   takeoff_roll / approach/landing : 1s
+   */
+  setPollingInterval(seconds) {
+    this._pollSeconds = Math.max(1, seconds);
+    if (!this._connected || !this._handle || this._activePollSecs === this._pollSeconds) return;
+    this._applyPollingInterval();
+  }
+
+  _applyPollingInterval() {
+    if (!this._handle || !this._SimConnectPeriod) return;
+    const interval = secondsToInterval(this._pollSeconds);
+
+    // Cancel current subscription then re-subscribe at new rate.
+    try {
+      this._handle.requestDataOnSimObject(
+        REQ_ID_PERIODIC, DEF_ID, 0,
+        this._SimConnectPeriod.NEVER, 0, 0, 0, 0
+      );
+      this._handle.requestDataOnSimObject(
+        REQ_ID_PERIODIC, DEF_ID, 0,
+        this._SimConnectPeriod.SECOND, 0, 0, interval, 0
+      );
+      this._activePollSecs = this._pollSeconds;
+    } catch (e) {
+      console.warn('[SimConnect] Could not change polling interval:', e.message);
+    }
   }
 
   async connect() {
     this._stopReconnect = false;
-    await this._connect();
+    await this._tryConnect();
   }
 
-  async _connect() {
+  async _tryConnect() {
     try {
-      let nodeSimConnect;
-      try {
-        nodeSimConnect = require('node-simconnect');
-      } catch (e) {
-        throw new Error(
-          'node-simconnect not found. This feature requires Windows with MSFS 2020 or 2024 installed.'
-        );
-      }
+      let sc;
+      try { sc = require('node-simconnect'); }
+      catch { throw new Error('node-simconnect not found. Requires Windows + MSFS installed.'); }
 
-      const {
-        open,
-        Protocol,
-        SimConnectDataType,
-        SimConnectPeriod,
-        SimObjectType,
-      } = nodeSimConnect;
+      const { open, Protocol, SimConnectDataType, SimConnectPeriod } = sc;
+      this._SimConnectPeriod = SimConnectPeriod;
 
-      // Try MSFS 2024 (FSX_SP2) first, fall back to FSX_SP2 which covers 2020 too
       const { recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.KittyHawk);
-      this._handle = handle;
-      this._connected = true;
-      this._reconnecting = false;
+      this._handle     = handle;
+      this._connected  = true;
 
-      // ── Define SimVars ────────────────────────────────────────────────────
-      // Each call adds one variable to definition DEF_ID.
-      // Order matters – we read them back in the same order.
-      const d = SimConnectDataType;
-      handle.addToDataDefinition(DEF_ID, 'PLANE LATITUDE',              'degrees',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'PLANE LONGITUDE',             'degrees',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'PLANE ALTITUDE',              'feet',             d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'PLANE HEADING DEGREES TRUE',  'degrees',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'AIRSPEED INDICATED',          'knots',            d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'GROUND VELOCITY',             'knots',            d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'VERTICAL SPEED',              'feet per minute',  d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'SIM ON GROUND',               'bool',             d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'ENG COMBUSTION:1',            'bool',             d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'ENG COMBUSTION:2',            'bool',             d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'GEAR HANDLE POSITION',        'bool',             d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'FLAPS HANDLE INDEX',          'number',           d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'FUEL TOTAL QUANTITY',         'gallons',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'PLANE BANK DEGREES',          'degrees',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'PLANE PITCH DEGREES',         'degrees',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'G FORCE',                     'gforce',           d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'AUTOPILOT MASTER',            'bool',             d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'TRANSPONDER CODE:1',          'bco16',            d.FLOAT64);
+      // ── Define SimVars (order matches _parse below) ───────────────────────
+      const dt = SimConnectDataType;
+      handle.addToDataDefinition(DEF_ID, 'PLANE LATITUDE',             'degrees',         dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE LONGITUDE',            'degrees',         dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE ALTITUDE',             'feet',            dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE HEADING DEGREES TRUE', 'degrees',         dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'AIRSPEED INDICATED',         'knots',           dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'GROUND VELOCITY',            'knots',           dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'VERTICAL SPEED',             'feet per minute', dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'SIM ON GROUND',              'bool',            dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'ENG COMBUSTION:1',           'bool',            dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'ENG COMBUSTION:2',           'bool',            dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'GEAR HANDLE POSITION',       'bool',            dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'FLAPS HANDLE INDEX',         'number',          dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'FUEL TOTAL QUANTITY',        'gallons',         dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'G FORCE',                    'gforce',          dt.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'AUTOPILOT MASTER',           'bool',            dt.FLOAT64);
 
-      // Request data every sim second (SECOND period)
+      // Start with current target interval
+      const interval = secondsToInterval(this._pollSeconds);
       handle.requestDataOnSimObject(
-        REQ_ID_PERIODIC,
-        DEF_ID,
-        0, // SIMCONNECT_OBJECT_ID_USER = 0
-        SimConnectPeriod.SECOND,
-        0, // flags
-        0, // origin
-        0, // interval
-        0  // limit (0 = unlimited)
+        REQ_ID_PERIODIC, DEF_ID, 0,
+        SimConnectPeriod.SECOND, 0, 0, interval, 0
       );
+      this._activePollSecs = this._pollSeconds;
 
-      // ── Event handlers ────────────────────────────────────────────────────
       handle.on('simObjectData', (recv) => {
         if (recv.requestID !== REQ_ID_PERIODIC) return;
-        const data = this._parseSimData(recv.data);
+        const data = this._parse(recv.data);
         if (data) this.emit('data', data);
       });
 
       handle.on('exception', (recv) => {
-        console.warn('[SimConnect] Exception:', recv.exception, 'sendID:', recv.sendID);
+        console.warn('[SimConnect] Exception code', recv.exception);
       });
 
-      handle.on('close', () => {
-        this._onDisconnect();
-      });
-
-      handle.on('error', (err) => {
-        console.error('[SimConnect] Error:', err);
-        this._onDisconnect();
-      });
+      handle.on('close', () => this._onDisconnect());
+      handle.on('error',  () => this._onDisconnect());
 
       this.emit('connected', {
         simVersion: recvOpen?.applicationName ?? 'Microsoft Flight Simulator',
-        simBuild:   recvOpen?.applicationBuildMajor ?? 0,
       });
-
-      console.log('[SimConnect] Connected to', recvOpen?.applicationName ?? 'MSFS');
 
     } catch (err) {
       this._connected = false;
       this._handle    = null;
-      const msg = this._friendlyError(err);
-      this.emit('error', new Error(msg));
-      console.error('[SimConnect] Connection failed:', msg);
+      this.emit('error', new Error(this._friendlyError(err)));
 
-      // Schedule reconnect
       if (!this._stopReconnect) {
-        this._reconnecting = true;
         setTimeout(() => {
-          if (!this._stopReconnect && !this._connected) {
-            this._connect();
-          }
+          if (!this._stopReconnect && !this._connected) this._tryConnect();
         }, RECONNECT_DELAY);
       }
     }
   }
 
-  _parseSimData(buf) {
+  _parse(buf) {
     try {
       return {
         lat:         buf.readFloat64(),
@@ -162,39 +164,29 @@ class SimConnectManager extends EventEmitter {
         gearDown:    buf.readFloat64() > 0.5,
         flapsIndex:  Math.round(buf.readFloat64()),
         fuelGallons: Math.round(buf.readFloat64() * 10) / 10,
-        bank:        Math.round(buf.readFloat64() * 10) / 10,
-        pitch:       Math.round(buf.readFloat64() * 10) / 10,
         gForce:      Math.round(buf.readFloat64() * 100) / 100,
         autopilot:   buf.readFloat64() > 0.5,
-        squawk:      Math.round(buf.readFloat64()).toString().padStart(4, '0'),
         timestamp:   Date.now(),
       };
-    } catch (err) {
-      console.error('[SimConnect] Failed to parse SimData:', err);
-      return null;
-    }
+    } catch { return null; }
   }
 
   _onDisconnect() {
     if (!this._connected) return;
-    this._connected = false;
-    this._handle    = null;
+    this._connected      = false;
+    this._handle         = null;
+    this._activePollSecs = null;
     this.emit('disconnected');
 
-    // Auto-reconnect
     if (!this._stopReconnect) {
-      this._reconnecting = true;
       setTimeout(() => {
-        if (!this._stopReconnect && !this._connected) {
-          this._connect();
-        }
+        if (!this._stopReconnect && !this._connected) this._tryConnect();
       }, RECONNECT_DELAY);
     }
   }
 
   disconnect() {
     this._stopReconnect = true;
-    this._reconnecting  = false;
     if (this._handle) {
       try { this._handle.close(); } catch {}
       this._handle = null;
@@ -206,14 +198,12 @@ class SimConnectManager extends EventEmitter {
   }
 
   _friendlyError(err) {
-    const msg = err?.message ?? String(err);
-    if (msg.includes('ECONNREFUSED') || msg.includes('connect')) {
-      return 'MSFS is not running or SimConnect is unavailable. Please start Microsoft Flight Simulator first.';
-    }
-    if (msg.includes('not found') || msg.includes('MODULE_NOT_FOUND')) {
-      return 'SimConnect library not found. Please run on Windows with MSFS installed.';
-    }
-    return msg;
+    const m = err?.message ?? String(err);
+    if (m.includes('ECONNREFUSED') || m.includes('connect'))
+      return 'MSFS is not running. Start Microsoft Flight Simulator first.';
+    if (m.includes('not found') || m.includes('MODULE_NOT_FOUND'))
+      return 'SimConnect not found. Run on Windows with MSFS installed.';
+    return m;
   }
 }
 

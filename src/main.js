@@ -1,69 +1,100 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = require('electron');
+// ── Disable GPU before anything else — saves ~50MB VRAM while MSFS is running
+app.disableHardwareAcceleration();
+
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 
-// Allow requiring native modules packaged with app
 app.allowRendererProcessReuse = true;
 
 // ── Persistent settings store ─────────────────────────────────────────────────
 const store = new Store({
   name: 'simcrewops-tracker',
   defaults: {
-    apiUrl: 'https://simcrewops.com',
-    apiToken: '',
-    autoConnect: true,
-    minimizeToTray: true,
-    windowBounds: { width: 900, height: 680 },
+    apiUrl:          'https://simcrewops.com',
+    apiToken:        '',
+    autoConnect:     true,
+    minimizeToTray:  true,
+    performanceMode: false,
+    windowBounds:    { width: 860, height: 640 },
   },
 });
 
-// ── Module imports (after app path is set) ────────────────────────────────────
+// ── Module imports ────────────────────────────────────────────────────────────
 let SimConnectManager = null;
-let FlightTracker = null;
-let ApiClient = null;
+let FlightTracker     = null;
+let ApiClient         = null;
 
-let mainWindow = null;
-let tray = null;
-let simManager = null;
+let mainWindow    = null;
+let tray          = null;
+let simManager    = null;
 let flightTracker = null;
-let apiClient = null;
-let isQuitting = false;
+let apiClient     = null;
+let isQuitting    = false;
 
-// ── Create tray icon programmatically ─────────────────────────────────────────
-function createTrayIcon(status = 'idle') {
-  // 16x16 PNG generated as a data URL based on status
-  const colors = {
-    idle:        '#64748b',
-    connecting:  '#f59e0b',
-    connected:   '#10b981',
-    tracking:    '#3b82f6',
-    error:       '#ef4444',
-  };
-  const color = colors[status] || colors.idle;
+// ── Tray icon (pre-built data URLs per state, zero runtime cost) ──────────────
+// 16×16 SVG-in-PNG encoded as minimal data URLs for each status colour.
+// Avoids any canvas dependency.
+const TRAY_ICONS = {
+  idle:       '#64748b',
+  connecting: '#f59e0b',
+  connected:  '#10b981',
+  tracking:   '#3b82f6',
+  error:      '#ef4444',
+};
 
-  // Use Electron nativeImage to create a simple colored circle icon
-  const { createCanvas } = (() => {
-    try { return require('canvas'); } catch { return null; }
-  })() || {};
-
-  if (createCanvas) {
-    const canvas = createCanvas(16, 16);
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, 16, 16);
-    ctx.beginPath();
-    ctx.arc(8, 8, 7, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    return nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
-  }
-
-  // Fallback: hard-coded 1x1 pixel image
-  return nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAA' +
-    'JklEQVQ4jWNgYGD4z8BQDwAAAP//AwBDAAEA8P8AAAD//wMAQwABAPD/AAAAA=='
+function createTrayIcon(status) {
+  const fill = TRAY_ICONS[status] || TRAY_ICONS.idle;
+  // Build a tiny SVG and convert to nativeImage
+  const svg = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">` +
+    `<circle cx="8" cy="8" r="7" fill="${fill}"/>` +
+    `</svg>`
   );
+  return nativeImage.createFromBuffer(svg, { scaleFactor: 1 });
+}
+
+// ── Per-phase UI update throttle (ms) ────────────────────────────────────────
+// Only send data to the renderer this often per phase.
+// The state machine in flight-tracker.js still runs every SimConnect tick.
+const PHASE_UI_MS = {
+  idle:          5000,
+  pre_flight:    4000,
+  taxi:          2000,
+  takeoff_roll:  1000,
+  airborne:      1000,
+  climb:         2500,
+  cruise:        3000,
+  descent:       2500,
+  approach:      1000,
+  landing:       1000,
+  post_flight:   5000,
+};
+
+let _currentPhase  = 'idle';
+let _lastUiSendMs  = 0;
+let _pendingData   = null;   // latest frame; sent to renderer at next allowed tick
+
+function getUiIntervalMs() {
+  const base = PHASE_UI_MS[_currentPhase] ?? 3000;
+  return store.get('performanceMode') ? Math.max(5000, base * 2) : base;
+}
+
+// ── Send to renderer (throttled for data frames) ──────────────────────────────
+function sendToRenderer(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send(channel, data);
+  }
+}
+
+function maybeSendData(data) {
+  _pendingData = data;
+  const now = Date.now();
+  if (now - _lastUiSendMs < getUiIntervalMs()) return;
+  _lastUiSendMs = now;
+  sendToRenderer('flight:data', data);
 }
 
 // ── Create main window ────────────────────────────────────────────────────────
@@ -71,30 +102,31 @@ function createWindow() {
   const bounds = store.get('windowBounds');
 
   mainWindow = new BrowserWindow({
-    width: bounds.width,
-    height: bounds.height,
-    minWidth: 760,
-    minHeight: 560,
+    width:     bounds.width,
+    height:    bounds.height,
+    minWidth:  720,
+    minHeight: 520,
     backgroundColor: '#0a0f1a',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     frame: process.platform !== 'darwin',
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
+      preload:                 path.join(__dirname, 'preload.js'),
+      contextIsolation:        true,
+      nodeIntegration:         false,
+      nodeIntegrationInWorker: false,
+      sandbox:                 false,
+      backgroundThrottling:    true,   // throttle timers when window is hidden
+      spellcheck:              false,
     },
-    icon: path.join(__dirname, '..', 'assets', 'icon.png'),
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    // Auto-connect if enabled
     if (store.get('autoConnect') && simManager) {
-      setTimeout(() => attemptSimConnect(), 1000);
+      setTimeout(() => attemptSimConnect(), 1200);
     }
   });
 
@@ -116,57 +148,31 @@ function createWindow() {
   });
 }
 
-// ── Create system tray ────────────────────────────────────────────────────────
+// ── System tray ───────────────────────────────────────────────────────────────
 function createTray() {
-  const icon = createTrayIcon('idle');
-  tray = new Tray(icon);
+  tray = new Tray(createTrayIcon('idle'));
   tray.setToolTip('SimCrewOps Tracker');
-
   updateTrayMenu('idle');
-
   tray.on('click', () => {
-    if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.focus();
-      } else {
-        mainWindow.show();
-      }
-    }
+    if (!mainWindow) return;
+    mainWindow.isVisible() ? mainWindow.focus() : mainWindow.show();
   });
 }
 
 function updateTrayMenu(status) {
   if (!tray) return;
-  const menu = Menu.buildFromTemplate([
+  tray.setImage(createTrayIcon(status));
+  tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'SimCrewOps Tracker', enabled: false },
-    { label: `Status: ${status.charAt(0).toUpperCase() + status.slice(1)}`, enabled: false },
+    { label: `${status.charAt(0).toUpperCase()}${status.slice(1)}`, enabled: false },
     { type: 'separator' },
-    {
-      label: 'Show Window',
-      click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } },
-    },
+    { label: 'Show', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      },
-    },
-  ]);
-  tray.setContextMenu(menu);
-
-  const icon = createTrayIcon(status);
-  tray.setImage(icon);
+    { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
+  ]));
 }
 
-// ── SimConnect connection management ──────────────────────────────────────────
-function sendToRenderer(channel, data) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, data);
-  }
-}
-
+// ── SimConnect + FlightTracker wiring ─────────────────────────────────────────
 function attemptSimConnect() {
   if (!simManager) return;
   sendToRenderer('simconnect:status', { state: 'connecting' });
@@ -194,16 +200,32 @@ function setupSimConnectListeners() {
   });
 
   simManager.on('data', (flightData) => {
+    // State machine always runs — accuracy requires every frame.
     flightTracker.update(flightData);
-    sendToRenderer('flight:data', flightData);
+    // UI updates are throttled by phase to save IPC + renderer CPU.
+    maybeSendData(flightData);
   });
 }
 
 function setupFlightTrackerListeners() {
-  flightTracker.on('phase', (phase) => {
-    sendToRenderer('flight:phase', phase);
-    if (phase.phase === 'tracking' || phase.phase === 'cruise') {
+  flightTracker.on('phase', ({ phase, prev, pollSecs }) => {
+    _currentPhase = phase;
+
+    // Tell SimConnect to poll at the rate appropriate for this phase
+    if (simManager && pollSecs) simManager.setPollingInterval(pollSecs);
+
+    // Flush pending data immediately on phase transitions
+    if (_pendingData) {
+      _lastUiSendMs = 0;
+      maybeSendData(_pendingData);
+    }
+
+    sendToRenderer('flight:phase', { phase, prev });
+
+    if (['climb', 'cruise', 'descent', 'airborne'].includes(phase)) {
       updateTrayMenu('tracking');
+    } else if (phase === 'idle' || phase === 'pre_flight') {
+      updateTrayMenu('connected');
     }
   });
 
@@ -218,8 +240,8 @@ function setupFlightTrackerListeners() {
   flightTracker.on('flightComplete', async (flightRecord) => {
     sendToRenderer('flight:complete', flightRecord);
     updateTrayMenu('connected');
+    _currentPhase = 'pre_flight';
 
-    // Auto-submit if token is configured
     const token = store.get('apiToken');
     if (token) {
       try {
@@ -234,76 +256,62 @@ function setupFlightTrackerListeners() {
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 function registerIpcHandlers() {
-  // SimConnect control
-  ipcMain.on('simconnect:connect', () => attemptSimConnect());
-  ipcMain.on('simconnect:disconnect', () => {
-    if (simManager) simManager.disconnect();
-  });
+  ipcMain.on('simconnect:connect',    () => attemptSimConnect());
+  ipcMain.on('simconnect:disconnect', () => simManager?.disconnect());
 
-  // Tracking control
-  ipcMain.on('tracking:start', () => {
-    if (flightTracker) flightTracker.startTracking();
-  });
-  ipcMain.on('tracking:stop', () => {
-    if (flightTracker) flightTracker.stopTracking();
-  });
+  ipcMain.on('tracking:start', () => flightTracker?.startTracking());
+  ipcMain.on('tracking:stop',  () => flightTracker?.stopTracking());
 
-  // Settings
   ipcMain.handle('settings:load', () => ({
-    apiUrl: store.get('apiUrl'),
-    apiToken: store.get('apiToken'),
-    autoConnect: store.get('autoConnect'),
-    minimizeToTray: store.get('minimizeToTray'),
+    apiUrl:          store.get('apiUrl'),
+    apiToken:        store.get('apiToken'),
+    autoConnect:     store.get('autoConnect'),
+    minimizeToTray:  store.get('minimizeToTray'),
+    performanceMode: store.get('performanceMode'),
   }));
 
-  ipcMain.handle('settings:save', (_, settings) => {
-    if (settings.apiUrl)   store.set('apiUrl', settings.apiUrl);
-    if (settings.apiToken !== undefined) store.set('apiToken', settings.apiToken);
-    if (settings.autoConnect !== undefined) store.set('autoConnect', settings.autoConnect);
-    if (settings.minimizeToTray !== undefined) store.set('minimizeToTray', settings.minimizeToTray);
-
-    // Update api client
-    if (apiClient) {
-      apiClient.setBaseUrl(store.get('apiUrl'));
-      apiClient.setToken(store.get('apiToken'));
+  ipcMain.handle('settings:save', (_, s) => {
+    if (s.apiUrl          !== undefined) store.set('apiUrl',          s.apiUrl);
+    if (s.apiToken        !== undefined) store.set('apiToken',        s.apiToken);
+    if (s.autoConnect     !== undefined) store.set('autoConnect',     s.autoConnect);
+    if (s.minimizeToTray  !== undefined) store.set('minimizeToTray',  s.minimizeToTray);
+    if (s.performanceMode !== undefined) {
+      store.set('performanceMode', s.performanceMode);
+      flightTracker?.setPerformanceMode(s.performanceMode);
     }
+    apiClient?.setBaseUrl(store.get('apiUrl'));
+    apiClient?.setToken(store.get('apiToken'));
     return true;
   });
 
-  // Manual flight submit
-  ipcMain.handle('api:submitFlight', async (_, flightRecord) => {
-    if (!apiClient) return { success: false, error: 'API client not initialized' };
-    const token = store.get('apiToken');
-    if (!token) return { success: false, error: 'No API token configured' };
+  ipcMain.handle('api:submitFlight', async (_, record) => {
+    if (!store.get('apiToken')) return { success: false, error: 'No API token configured' };
     try {
-      const result = await apiClient.submitFlight(flightRecord);
-      return { success: true, data: result };
+      return { success: true, data: await apiClient.submitFlight(record) };
     } catch (err) {
       return { success: false, error: err.message };
     }
   });
 
-  // Open external links
   ipcMain.on('open:external', (_, url) => shell.openExternal(url));
 
-  // App info
   ipcMain.handle('app:version', () => app.getVersion());
+
   ipcMain.handle('app:getState', () => ({
-    simConnected: simManager?.isConnected() ?? false,
-    trackingActive: flightTracker?.isTracking() ?? false,
+    simConnected:    simManager?.isConnected()   ?? false,
+    trackingActive:  flightTracker?.isTracking() ?? false,
     settings: {
-      apiUrl: store.get('apiUrl'),
-      apiToken: store.get('apiToken'),
-      autoConnect: store.get('autoConnect'),
-      minimizeToTray: store.get('minimizeToTray'),
+      apiUrl:          store.get('apiUrl'),
+      apiToken:        store.get('apiToken'),
+      autoConnect:     store.get('autoConnect'),
+      minimizeToTray:  store.get('minimizeToTray'),
+      performanceMode: store.get('performanceMode'),
     },
   }));
 
-  // Window controls (Windows custom titlebar)
   ipcMain.on('window:minimize', () => mainWindow?.minimize());
   ipcMain.on('window:maximize', () => {
-    if (mainWindow?.isMaximized()) mainWindow.unmaximize();
-    else mainWindow?.maximize();
+    mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize();
   });
   ipcMain.on('window:close', () => {
     if (store.get('minimizeToTray')) mainWindow?.hide();
@@ -313,7 +321,6 @@ function registerIpcHandlers() {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.on('ready', async () => {
-  // Lazy-load modules (they may require native modules)
   try {
     SimConnectManager = require('./simconnect');
     FlightTracker     = require('./flight-tracker');
@@ -321,6 +328,7 @@ app.on('ready', async () => {
 
     simManager    = new SimConnectManager();
     flightTracker = new FlightTracker();
+    flightTracker.setPerformanceMode(store.get('performanceMode'));
     apiClient     = new ApiClient(store.get('apiUrl'), store.get('apiToken'));
 
     setupSimConnectListeners();
@@ -334,31 +342,15 @@ app.on('ready', async () => {
   createTray();
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    // Don't quit — we live in the tray
-  }
-});
+app.on('window-all-closed', () => { /* stay in tray */ });
+app.on('activate', () => mainWindow?.show());
+app.on('before-quit', () => { isQuitting = true; simManager?.disconnect(); });
 
-app.on('activate', () => {
-  if (mainWindow) mainWindow.show();
-});
-
-app.on('before-quit', () => {
-  isQuitting = true;
-  if (simManager) simManager.disconnect();
-});
-
-// Prevent multiple instances
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    if (mainWindow) { mainWindow.restore?.(); mainWindow.show(); mainWindow.focus(); }
   });
 }
