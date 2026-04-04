@@ -83,11 +83,8 @@ class SimConnectManager extends EventEmitter {
       handle.addToDataDefinition(DEF_ID, 'GEAR HANDLE POSITION',        'bool',             d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'FLAPS HANDLE INDEX',          'number',           d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'FUEL TOTAL QUANTITY',         'gallons',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'PLANE BANK DEGREES',          'degrees',          d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'PLANE PITCH DEGREES',         'degrees',          d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'G FORCE',                     'gforce',           d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'AUTOPILOT MASTER',            'bool',             d.FLOAT64);
-      handle.addToDataDefinition(DEF_ID, 'TRANSPONDER CODE:1',          'bco16',            d.FLOAT64);
 
       // Request data every sim second (SECOND period)
       handle.requestDataOnSimObject(
@@ -164,11 +161,8 @@ class SimConnectManager extends EventEmitter {
         gearDown:    buf.readFloat64() > 0.5,
         flapsIndex:  Math.round(buf.readFloat64()),
         fuelGallons: Math.round(buf.readFloat64() * 10) / 10,
-        bank:        Math.round(buf.readFloat64() * 10) / 10,
-        pitch:       Math.round(buf.readFloat64() * 10) / 10,
         gForce:      Math.round(buf.readFloat64() * 100) / 100,
         autopilot:   buf.readFloat64() > 0.5,
-        squawk:      Math.round(buf.readFloat64()).toString().padStart(4, '0'),
         timestamp:   Date.now(),
       };
     } catch (err) {
@@ -180,7 +174,11 @@ class SimConnectManager extends EventEmitter {
   _onDisconnect() {
     if (!this._connected) return;
     this._connected = false;
+    const oldHandle = this._handle;
     this._handle    = null;
+    // Strip listeners from the stale handle so stray events after close
+    // don't trigger another disconnect/reconnect cycle.
+    if (oldHandle) { try { oldHandle.removeAllListeners(); } catch {} }
     this.emit('disconnected');
 
     // Auto-reconnect
@@ -198,6 +196,7 @@ class SimConnectManager extends EventEmitter {
     this._stopReconnect = true;
     this._reconnecting  = false;
     if (this._handle) {
+      try { this._handle.removeAllListeners(); } catch {}
       try { this._handle.close(); } catch {}
       this._handle = null;
     }

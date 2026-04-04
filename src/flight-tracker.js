@@ -149,6 +149,8 @@ class FlightTracker extends EventEmitter {
     if (now - this._lastRouteAt > DATA_INTERVAL_MS) {
       this._routePoints.push({ lat: data.lat, lon: data.lon, alt: data.altitude, ts: now });
       this._lastRouteAt = now;
+      // Cap at ~6 hours of data (10s interval × 2160 = 6 h) to bound memory
+      if (this._routePoints.length > 2160) this._routePoints.shift();
     }
 
     // Touchdown zone: track threshold crossing during approach

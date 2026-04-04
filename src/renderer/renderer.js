@@ -87,9 +87,10 @@ function initMap() {
   });
 
   // Dark satellite tile layer (matches V4 mockup)
+  // keepBuffer:1 and updateWhenIdle limit speculative tile fetches to reduce CPU/RAM churn.
   L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 18 }
+    { maxZoom: 18, keepBuffer: 1, updateWhenIdle: true }
   ).addTo(leafletMap);
 }
 
@@ -190,7 +191,7 @@ function addEvent(type, text) {
   `;
   eventLog.insertBefore(item, eventLog.firstChild);
 
-  while (eventLog.children.length > 20) {
+  while (eventLog.children.length > 100) {
     eventLog.removeChild(eventLog.lastChild);
   }
 }
@@ -470,6 +471,8 @@ window.tracker.on('simconnect:status', ({ state: s, message, info }) => {
       $(id).innerHTML = '—';
     });
     $('m-systems').innerHTML = '—';
+    state.routePoints = [];
+    resetMap();
   } else if (s === 'error') {
     addEvent('error', message || 'Connection error');
   }
