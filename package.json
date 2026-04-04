@@ -1,0 +1,54 @@
+{
+  "name": "simcrewops-tracker",
+  "version": "1.0.3",
+  "description": "SimCrewOps Desktop Flight Tracker – connects MSFS via SimConnect and logs flights to simcrewops.com",
+  "main": "src/main.js",
+  "author": "SimCrewOps",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build": "electron-builder --win --mac"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "node-simconnect": "^4.0.0"
+  },
+  "devDependencies": {
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.simcrewops.tracker",
+    "productName": "SimCrewOps Tracker",
+    "copyright": "Copyright © 2024 SimCrewOps",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
