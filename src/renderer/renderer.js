@@ -2,151 +2,147 @@
 
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
-  simConnected:    false,
-  tracking:        false,
-  phase:           'idle',
-  lastData:        null,
-  routePoints:     [],
-  takeoffTime:     null,
-  timerInterval:   null,
-  pendingFlight:   null,   // completed flight awaiting submit
+  simConnected:  false,
+  tracking:      false,
+  phase:         'idle',
+  lastData:      null,
+  routePoints:   [],
+  takeoffTime:   null,
+  timerInterval: null,
+  pendingFlight: null,
 };
+
+// ── Leaflet map state ──────────────────────────────────────────────────────
+let leafletMap    = null;
+let planeMarker   = null;
+let routePolyline = null;
+let depMarker     = null;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
-const simStatusPill    = $('sim-status-pill');
-const simStatusLabel   = $('sim-status-label');
-const connTitle        = $('conn-title');
-const connDesc         = $('conn-desc');
-const btnConnect       = $('btn-connect');
+const btnConnect        = $('btn-connect');
 const btnToggleTracking = $('btn-toggle-tracking');
-const phaseBadge       = $('phase-badge');
-const phaseLabel       = $('phase-label');
-const depIcao          = $('dep-icao');
-const arrIcao          = $('arr-icao');
-const flightTimer      = $('flight-timer');
-const trackingPill     = $('tracking-status-pill');
-const trackingLabel    = $('tracking-label');
-const lastUpdate       = $('last-update');
-const versionTag       = $('version-tag');
-const mapCanvas        = $('map-canvas');
-const mapCoords        = $('map-coords');
-const eventLog         = $('event-log');
-const completeBanner   = $('flight-complete-banner');
-const bannerTitle      = $('banner-title');
-const bannerDetail     = $('banner-detail');
+const depIcao           = $('dep-icao');
+const arrIcao           = $('arr-icao');
+const flightTimer       = $('flight-timer');
+const lastUpdate        = $('last-update');
+const versionTag        = $('version-tag');
+const mapCoords         = $('map-coords');
+const eventLog          = $('event-log');
+const completeBanner    = $('flight-complete-banner');
+const bannerTitle       = $('banner-title');
+const bannerDetail      = $('banner-detail');
+const settingsOverlay   = $('settings-overlay');
 
-// ── Map canvas setup ───────────────────────────────────────────────────────
-const ctx = mapCanvas.getContext('2d');
+// ── Phase order + mapping ──────────────────────────────────────────────────
+const PHASE_ORDER = ['preflight','taxi_out','takeoff','climb','cruise','descent','approach','landing','taxi_in'];
 
-function resizeCanvas() {
-  const parent = mapCanvas.parentElement;
-  const rect   = parent.getBoundingClientRect();
-  mapCanvas.width  = rect.width  - 20;
-  mapCanvas.height = 180;
-  drawMap();
+const PHASE_TO_ID = {
+  pre_flight:   'preflight',
+  taxi:         'taxi_out',
+  takeoff_roll: 'takeoff',
+  airborne:     'climb',
+  climb:        'climb',
+  cruise:       'cruise',
+  descent:      'descent',
+  approach:     'approach',
+  landing:      'landing',
+  post_flight:  'taxi_in',
+};
+
+// ── Leaflet map ─────────────────────────────────────────────────────────────
+function makePlaneIcon(color, sizePx, rotationDeg, isUser) {
+  const glow = isUser
+    ? 'drop-shadow(0 0 6px rgba(34,255,102,0.9))'
+    : 'drop-shadow(0 0 3px rgba(0,0,0,0.8))';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"
+      width="${sizePx}" height="${sizePx}"
+      style="transform:rotate(${rotationDeg}deg);filter:${glow};display:block">
+    <g fill="${color}" stroke="rgba(0,0,0,0.4)" stroke-width="0.8">
+      <path d="M20 2 C18.5 2 17.5 4 17.5 7 L17.5 15 L4 22 L4 25 L17.5 21
+               L17.5 32 L13 35 L13 37 L20 35.5 L27 37 L27 35 L22.5 32
+               L22.5 21 L36 25 L36 22 L22.5 15 L22.5 7 C22.5 4 21.5 2 20 2Z"/>
+    </g>
+  </svg>`;
+  return L.divIcon({
+    html: svg,
+    className: '',
+    iconSize:   [sizePx, sizePx],
+    iconAnchor: [sizePx / 2, sizePx / 2],
+  });
 }
 
-// Mercator projection: lat/lon → canvas x/y
-function project(lat, lon, w, h, bounds) {
-  const { minLat, maxLat, minLon, maxLon } = bounds;
-  const padX = w * 0.08, padY = h * 0.08;
-  const x = padX + ((lon - minLon) / (maxLon - minLon)) * (w - 2 * padX);
-  // Invert lat (north = top)
-  const y = padY + ((maxLat - lat) / (maxLat - minLat)) * (h - 2 * padY);
-  return { x, y };
-}
-
-function drawMap() {
-  const w = mapCanvas.width;
-  const h = mapCanvas.height;
-  ctx.clearRect(0, 0, w, h);
-
-  // Background
-  ctx.fillStyle = '#0c1628';
-  ctx.fillRect(0, 0, w, h);
-
-  // Grid lines
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 8; i++) {
-    const x = (w / 8) * i;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-  }
-  for (let i = 0; i <= 5; i++) {
-    const y = (h / 5) * i;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-  }
-
-  const pts = state.routePoints;
-  if (pts.length === 0) {
-    // Draw placeholder text
-    ctx.fillStyle = 'rgba(71,85,105,0.6)';
-    ctx.font = '11px -apple-system, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Route will appear here once airborne', w / 2, h / 2);
+function initMap() {
+  if (typeof L === 'undefined') {
+    console.warn('[tracker] Leaflet not available — map disabled');
     return;
   }
 
-  // Compute bounds with padding
-  let minLat = Infinity, maxLat = -Infinity;
-  let minLon = Infinity, maxLon = -Infinity;
-  for (const p of pts) {
-    if (p.lat < minLat) minLat = p.lat;
-    if (p.lat > maxLat) maxLat = p.lat;
-    if (p.lon < minLon) minLon = p.lon;
-    if (p.lon > maxLon) maxLon = p.lon;
+  leafletMap = L.map('map', {
+    center: [38, -98],
+    zoom: 4,
+    zoomControl: true,
+    attributionControl: false,
+  });
+
+  // Dark satellite tile layer (matches V4 mockup)
+  L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 18 }
+  ).addTo(leafletMap);
+}
+
+function updateMap(data) {
+  if (!leafletMap || !data) return;
+
+  const { lat, lon, heading } = data;
+  const icon = makePlaneIcon('#22ff66', 32, heading ?? 0, true);
+
+  if (planeMarker) {
+    planeMarker.setLatLng([lat, lon]);
+    planeMarker.setIcon(icon);
+  } else {
+    planeMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 })
+      .addTo(leafletMap);
   }
-  // Add a bit of padding around the bounds
-  const latPad = Math.max((maxLat - minLat) * 0.2, 0.5);
-  const lonPad = Math.max((maxLon - minLon) * 0.2, 1.0);
-  const bounds = {
-    minLat: minLat - latPad, maxLat: maxLat + latPad,
-    minLon: minLon - lonPad, maxLon: maxLon + lonPad,
-  };
 
-  // Draw route line
-  ctx.beginPath();
-  ctx.strokeStyle = 'rgba(59,130,246,0.6)';
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  for (let i = 0; i < pts.length; i++) {
-    const { x, y } = project(pts[i].lat, pts[i].lon, w, h, bounds);
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  // Update route polyline
+  if (state.routePoints.length > 1) {
+    const latlngs = state.routePoints.map(p => [p.lat, p.lon]);
+    if (routePolyline) {
+      routePolyline.setLatLngs(latlngs);
+    } else {
+      routePolyline = L.polyline(latlngs, {
+        color: '#f48223',
+        weight: 2.5,
+        opacity: 0.75,
+        dashArray: '8 5',
+      }).addTo(leafletMap);
+    }
   }
-  ctx.stroke();
 
-  // Route glow
-  ctx.beginPath();
-  ctx.strokeStyle = 'rgba(59,130,246,0.15)';
-  ctx.lineWidth = 6;
-  for (let i = 0; i < pts.length; i++) {
-    const { x, y } = project(pts[i].lat, pts[i].lon, w, h, bounds);
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+  // Smooth pan to current position
+  leafletMap.panTo([lat, lon], { animate: true, duration: 0.5 });
+}
 
-  // Departure dot
-  const dep = project(pts[0].lat, pts[0].lon, w, h, bounds);
-  ctx.beginPath();
-  ctx.arc(dep.x, dep.y, 4, 0, Math.PI * 2);
-  ctx.fillStyle = '#10b981';
-  ctx.fill();
+function addDepMarker(lat, lon, icao) {
+  if (!leafletMap) return;
+  if (depMarker) leafletMap.removeLayer(depMarker);
+  depMarker = L.circleMarker([lat, lon], {
+    radius: 5,
+    color: '#f48223',
+    fillColor: '#f48223',
+    fillOpacity: 0.9,
+    weight: 1,
+  }).bindTooltip(icao, { direction: 'bottom', offset: [0, 6] }).addTo(leafletMap);
+}
 
-  // Current position dot
-  const cur = project(pts[pts.length - 1].lat, pts[pts.length - 1].lon, w, h, bounds);
-  ctx.beginPath();
-  ctx.arc(cur.x, cur.y, 5, 0, Math.PI * 2);
-  ctx.fillStyle = '#3b82f6';
-  ctx.fill();
-  // Pulse ring
-  ctx.beginPath();
-  ctx.arc(cur.x, cur.y, 8, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(59,130,246,0.4)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+function resetMap() {
+  if (planeMarker)   { leafletMap.removeLayer(planeMarker);   planeMarker   = null; }
+  if (routePolyline) { leafletMap.removeLayer(routePolyline); routePolyline = null; }
+  if (depMarker)     { leafletMap.removeLayer(depMarker);     depMarker     = null; }
+  if (leafletMap)    { leafletMap.setView([38, -98], 4); }
 }
 
 // ── Timer ──────────────────────────────────────────────────────────────────
@@ -169,12 +165,11 @@ function updateTimer() {
   const m = Math.floor((elapsed % 3600000) / 60000);
   const s = Math.floor((elapsed % 60000) / 1000);
   flightTimer.textContent =
-    `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 // ── Event log ──────────────────────────────────────────────────────────────
 function addEvent(type, text) {
-  // Remove placeholder if present
   const placeholder = eventLog.querySelector('.event-placeholder');
   if (placeholder) placeholder.remove();
 
@@ -189,13 +184,12 @@ function addEvent(type, text) {
   const item = document.createElement('div');
   item.className = `event-item ${type}`;
   item.innerHTML = `
-    <span class="evt-icon">${icons[type] || 'ℹ️'}</span>
+    <span class="evt-icon">${icons[type] ?? 'ℹ️'}</span>
     <span>${text}</span>
-    <span class="evt-time">${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}</span>
+    <span class="evt-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
   `;
   eventLog.insertBefore(item, eventLog.firstChild);
 
-  // Keep log bounded
   while (eventLog.children.length > 20) {
     eventLog.removeChild(eventLog.lastChild);
   }
@@ -203,81 +197,110 @@ function addEvent(type, text) {
 
 // ── SimConnect status UI ───────────────────────────────────────────────────
 function setSimStatus(status, message) {
-  simStatusPill.className = `status-pill ${status}`;
-  simStatusLabel.textContent = message;
+  const connStatus = $('conn-status');
+  const connDot    = $('conn-dot');
+  const connLabel  = $('conn-label');
+
+  // Reset
+  connStatus.className = '';
+  connDot.className    = 'conn-dot';
 
   switch (status) {
     case 'connected':
-      connTitle.textContent = 'SimConnect Connected';
-      connDesc.textContent  = 'Reading flight data from Microsoft Flight Simulator';
-      btnConnect.innerHTML  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Disconnect`;
-      btnConnect.className  = 'btn btn-sm btn-danger';
+      connStatus.className = 'connected';
+      connDot.classList.add('connected');
+      connLabel.textContent = 'Connected to MSFS';
+      btnConnect.textContent = '⏹';
+      btnConnect.title       = 'Disconnect from MSFS';
+      btnConnect.className   = 'title-action-btn connected';
       btnToggleTracking.disabled = false;
       state.simConnected = true;
+      $('sync-spinner').style.display = 'block';
+      $('status-text').textContent = 'Connected — SimConnect active';
       break;
 
     case 'connecting':
-      connTitle.textContent = 'Connecting to SimConnect…';
-      connDesc.textContent  = 'Waiting for Microsoft Flight Simulator';
-      btnConnect.innerHTML  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Cancel`;
-      btnConnect.className  = 'btn btn-sm';
+      connStatus.className = 'connecting';
+      connDot.classList.add('connecting');
+      connLabel.textContent = 'Connecting…';
+      btnConnect.textContent = '✕';
+      btnConnect.title       = 'Cancel';
+      btnConnect.className   = 'title-action-btn';
       btnToggleTracking.disabled = true;
       state.simConnected = false;
+      $('sync-spinner').style.display = 'block';
+      $('status-text').textContent = 'Connecting to Microsoft Flight Simulator…';
       break;
 
     case 'error':
-      connTitle.textContent = 'Connection Failed';
-      connDesc.textContent  = message || 'MSFS not running or SimConnect unavailable';
-      btnConnect.innerHTML  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-5.47L1 10"/></svg> Retry`;
-      btnConnect.className  = 'btn btn-sm btn-primary';
+      connStatus.className = 'error';
+      connDot.classList.add('error');
+      connLabel.textContent = 'Connection Failed';
+      btnConnect.textContent = '⚡';
+      btnConnect.title       = 'Retry connection';
+      btnConnect.className   = 'title-action-btn';
       btnToggleTracking.disabled = true;
       state.simConnected = false;
+      $('sync-spinner').style.display = 'none';
+      $('status-text').textContent = message || 'MSFS not running or SimConnect unavailable';
       break;
 
     default: // disconnected
-      connTitle.textContent = 'Not Connected';
-      connDesc.textContent  = 'Click Connect to link to Microsoft Flight Simulator';
-      btnConnect.innerHTML  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Connect`;
-      btnConnect.className  = 'btn btn-sm btn-primary';
+      connLabel.textContent = 'Disconnected';
+      btnConnect.textContent = '⚡';
+      btnConnect.title       = 'Connect to MSFS';
+      btnConnect.className   = 'title-action-btn';
       btnToggleTracking.disabled = true;
       state.simConnected = false;
+      $('sync-spinner').style.display = 'none';
+      $('status-text').textContent = 'Not connected to MSFS';
   }
 }
 
 // ── Phase UI ───────────────────────────────────────────────────────────────
-const PHASE_LABELS = {
-  idle:         { text: 'Idle',          icon: '✈' },
-  pre_flight:   { text: 'Pre-Flight',    icon: '🔧' },
-  taxi:         { text: 'Taxiing',       icon: '🚕' },
-  takeoff_roll: { text: 'Takeoff Roll',  icon: '🛫' },
-  airborne:     { text: 'Airborne',      icon: '✈' },
-  climb:        { text: 'Climbing',      icon: '↗' },
-  cruise:       { text: 'Cruise',        icon: '✈' },
-  descent:      { text: 'Descending',    icon: '↘' },
-  approach:     { text: 'Approach',      icon: '📍' },
-  landing:      { text: 'Landing',       icon: '🛬' },
-  post_flight:  { text: 'Post-Flight',   icon: '🅿' },
-};
-
-function setPhase(phase, prev) {
+function setPhase(phase) {
   state.phase = phase;
-  const info = PHASE_LABELS[phase] || PHASE_LABELS.idle;
 
-  phaseBadge.className = `phase-badge ${phase}`;
-  phaseLabel.textContent = info.text;
-  phaseBadge.querySelector('.phase-icon').textContent = info.icon;
+  const currentId  = PHASE_TO_ID[phase];
+  const currentIdx = PHASE_ORDER.indexOf(currentId);
+
+  PHASE_ORDER.forEach((phId, idx) => {
+    const el = $(`ph-${phId}`);
+    if (!el) return;
+    el.classList.remove('completed', 'active');
+    if (currentId && idx < currentIdx)  el.classList.add('completed');
+    if (currentId && idx === currentIdx) el.classList.add('active');
+  });
 
   // Tracking pill
-  if (['climb','cruise','descent','approach','airborne'].includes(phase)) {
-    trackingPill.className = 'status-pill tracking';
-    trackingLabel.textContent = 'Tracking Active';
+  const tPill  = $('tracking-status-pill');
+  const tLabel = $('tracking-label');
+
+  if (['airborne','climb','cruise','descent','approach'].includes(phase)) {
+    if (tPill)  tPill.className = 'tracking';
+    if (tLabel) tLabel.textContent = 'Tracking Active';
     if (!state.takeoffTime) startTimer();
+    $('status-text').textContent = phaseDisplayName(phase);
   } else if (phase === 'idle' || phase === 'pre_flight') {
-    trackingPill.className = 'status-pill';
-    trackingLabel.textContent = 'Not Tracking';
+    if (tPill)  tPill.className = '';
+    if (tLabel) tLabel.textContent = 'Not Tracking';
     stopTimer();
     flightTimer.textContent = '00:00:00';
+    if (phase === 'idle') $('status-text').textContent = 'Connected — waiting for flight';
+  } else {
+    if (tLabel) tLabel.textContent = phaseDisplayName(phase);
+    $('status-text').textContent = phaseDisplayName(phase);
   }
+}
+
+function phaseDisplayName(phase) {
+  const map = {
+    idle: 'Idle', pre_flight: 'Pre-Flight', taxi: 'Taxiing',
+    takeoff_roll: 'Takeoff Roll', airborne: 'Airborne',
+    climb: 'Climbing', cruise: 'Cruise', descent: 'Descending',
+    approach: 'On Approach', landing: 'Landing', post_flight: 'Post-Flight',
+  };
+  return map[phase] || phase;
 }
 
 // ── Flight data UI ─────────────────────────────────────────────────────────
@@ -287,43 +310,39 @@ function updateMetrics(d) {
   $('m-altitude').innerHTML = `${d.altitude.toLocaleString()}<span class="metric-unit">ft</span>`;
   $('m-ias').innerHTML      = `${d.ias}<span class="metric-unit">kt</span>`;
 
-  const vsColor = d.vs > 0 ? 'var(--green)' : d.vs < -800 ? 'var(--red)' : 'var(--amber)';
+  const vsColor = d.vs > 0 ? '#6ee7b7' : d.vs < -800 ? '#f87171' : '#fcd34d';
   $('m-vs').style.color = vsColor;
   $('m-vs').innerHTML   = `${d.vs > 0 ? '+' : ''}${d.vs.toLocaleString()}<span class="metric-unit">fpm</span>`;
 
-  $('m-hdg').innerHTML  = `${String(d.heading).padStart(3,'0')}<span class="metric-unit">°</span>`;
+  $('m-hdg').innerHTML  = `${String(d.heading).padStart(3, '0')}<span class="metric-unit">°</span>`;
   $('m-gs').innerHTML   = `${d.groundSpeed}<span class="metric-unit">kt</span>`;
   $('m-fuel').innerHTML = `${Math.round(d.fuelGallons).toLocaleString()}<span class="metric-unit">gal</span>`;
 
-  const gColor = d.gForce > 2 ? 'var(--red)' : d.gForce > 1.5 ? 'var(--amber)' : 'var(--text-primary)';
+  const gColor = d.gForce > 2 ? '#f87171' : d.gForce > 1.5 ? '#fcd34d' : 'inherit';
   $('m-gforce').style.color = gColor;
   $('m-gforce').innerHTML   = `${d.gForce.toFixed(2)}<span class="metric-unit">G</span>`;
 
-  // Systems: gear, flaps, autopilot
-  const gear = d.gearDown ? '⚙ Gear↓' : '⚙ Gear↑';
+  const gear  = d.gearDown ? '⚙ Gear↓' : '⚙ Gear↑';
   const flaps = d.flapsIndex > 0 ? `Flaps ${d.flapsIndex}` : 'Flaps 0';
-  const ap = d.autopilot ? '🟢 AP' : 'AP Off';
-  $('m-systems').innerHTML = `<span style="font-size:10px; color:var(--text-secondary);">${gear} · ${flaps} · ${ap}</span>`;
+  const ap    = d.autopilot ? '🟢 AP' : 'AP Off';
+  $('m-systems').innerHTML =
+    `<span style="font-size:10px; color:rgba(255,255,255,0.5);">${gear} · ${flaps} · ${ap}</span>`;
 
-  // Position
   mapCoords.textContent =
-    `${d.lat.toFixed(4)}° ${d.lat >= 0 ? 'N' : 'S'}  ${Math.abs(d.lon).toFixed(4)}° ${d.lon >= 0 ? 'E' : 'W'}`;
+    `${d.lat.toFixed(4)}°${d.lat >= 0 ? 'N' : 'S'} ${Math.abs(d.lon).toFixed(4)}°${d.lon >= 0 ? 'E' : 'W'}`;
 
-  // Update route
-  state.routePoints = state.routePoints.concat([]);  // copy preserved
-  drawMap();
+  lastUpdate.textContent =
+    `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 
-  // Last update timestamp
-  lastUpdate.textContent = `Updated ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' })}`;
+  // Update the Leaflet map with current position + heading
+  updateMap(d);
 }
 
 // ── Settings panel ─────────────────────────────────────────────────────────
-const settingsOverlay = $('settings-overlay');
-
 async function openSettings() {
-  const s = await window.tracker.loadSettings();
-  $('inp-api-url').value   = s.apiUrl   || 'https://simcrewops.com';
-  $('inp-api-token').value = s.apiToken || '';
+  const s = window.tracker ? await window.tracker.loadSettings() : {};
+  $('inp-api-url').value        = s.apiUrl   || 'https://simcrewops.com';
+  $('inp-api-token').value      = s.apiToken || '';
   $('chk-auto-connect').checked = !!s.autoConnect;
   $('chk-tray').checked         = !!s.minimizeToTray;
   $('verify-status').style.display = 'none';
@@ -341,49 +360,48 @@ async function saveSettings() {
     autoConnect:    $('chk-auto-connect').checked,
     minimizeToTray: $('chk-tray').checked,
   };
-  await window.tracker.saveSettings(settings);
+  if (window.tracker) await window.tracker.saveSettings(settings);
   closeSettings();
   addEvent('info', 'Settings saved');
 }
 
 async function verifyToken() {
   const status = $('verify-status');
-  status.style.display = 'block';
-  status.style.background = 'var(--bg-elevated)';
-  status.style.color = 'var(--text-secondary)';
-  status.textContent = 'Verifying…';
+  status.style.display    = 'block';
+  status.style.background = 'rgba(255,255,255,0.04)';
+  status.style.color      = 'rgba(255,255,255,0.5)';
+  status.textContent      = 'Verifying…';
 
-  // Temporarily save so we can test
-  await window.tracker.saveSettings({
+  if (window.tracker) await window.tracker.saveSettings({
     apiUrl:   $('inp-api-url').value.trim(),
     apiToken: $('inp-api-token').value.trim(),
   });
 
   try {
-    const result = await window.tracker.submitFlight({
+    if (!window.tracker) throw new Error('Not running in Electron');
+    await window.tracker.submitFlight({
       sessionDate: new Date().toISOString().split('T')[0],
       aircraft:    'TEST',
       duration:    1,
       simVersion:  'MSFS 2024',
     });
-    // If we get here without an error, consider it valid
-    status.style.background = 'var(--green-dim)';
-    status.style.color = '#34d399';
-    status.textContent = '✓ API key is valid and connected';
+    status.style.background = 'rgba(74,222,128,0.1)';
+    status.style.color      = '#34d399';
+    status.textContent      = '✓ API key is valid and connected';
   } catch (err) {
     if (err.message?.includes('token') || err.message?.includes('Unauthorized')) {
-      status.style.background = 'var(--red-dim)';
-      status.style.color = '#f87171';
-      status.textContent = '✗ Invalid API key — check your SimCrewOps settings';
+      status.style.background = 'rgba(248,113,113,0.1)';
+      status.style.color      = '#f87171';
+      status.textContent      = '✗ Invalid API key — check your SimCrewOps settings';
     } else {
-      status.style.background = 'var(--amber-dim)';
-      status.style.color = '#fcd34d';
-      status.textContent = `⚠ ${err.message}`;
+      status.style.background = 'rgba(250,204,21,0.1)';
+      status.style.color      = '#fcd34d';
+      status.textContent      = `⚠ ${err.message}`;
     }
   }
 }
 
-// ── Completed flight banner ────────────────────────────────────────────────
+// ── Flight complete banner ─────────────────────────────────────────────────
 function showCompleteBanner(record) {
   state.pendingFlight = record;
 
@@ -399,29 +417,48 @@ function showCompleteBanner(record) {
     `Duration: ${h}h ${m}m · Landing Rate: ${lr} · Max Alt: ${(record.maxAltitude || 0).toLocaleString()} ft`;
 
   completeBanner.classList.add('show');
-  depIcao.textContent = dep;
-  arrIcao.textContent = arr;
 }
 
 async function submitFlight() {
   if (!state.pendingFlight) return;
   const btn = $('btn-submit-flight');
-  btn.disabled = true;
-  btn.textContent = 'Submitting…';
+  btn.disabled     = true;
+  btn.textContent  = 'Submitting…';
 
   const result = await window.tracker.submitFlight(state.pendingFlight);
   if (result.success) {
-    addEvent('complete', `Flight ${state.pendingFlight.departure || '?'} → ${state.pendingFlight.arrival || '?'} logged to SimCrewOps`);
+    addEvent('complete', `Flight ${state.pendingFlight.departure || '?'} → ${state.pendingFlight.arrival || '?'} logged`);
     completeBanner.classList.remove('show');
     state.pendingFlight = null;
   } else {
-    btn.disabled = false;
-    btn.textContent = 'Retry Submit';
+    btn.disabled    = false;
+    btn.textContent = '▶ Retry Submit';
     addEvent('error', `Submit failed: ${result.error}`);
   }
 }
 
-// ── Wire up events from main process ──────────────────────────────────────
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const tab   = document.querySelector(`.tab[data-tab="${name}"]`);
+  const panel = $(`tab-${name}`);
+  if (tab)   tab.classList.add('active');
+  if (panel) panel.classList.add('active');
+
+  // Invalidate map size when the map tab becomes visible
+  if (name === 'myflight' && leafletMap) {
+    setTimeout(() => leafletMap.invalidateSize(), 50);
+  }
+}
+
+// ── Wire IPC events from main process ─────────────────────────────────────
+// Guard: window.tracker only exists inside Electron (defined by preload.js).
+// Without the guard the top-level calls below crash the script in any plain
+// browser context (static preview, unit tests), breaking purely-UI features
+// like tab switching that have nothing to do with the IPC bridge.
+if (window.tracker) {
+
 window.tracker.on('simconnect:status', ({ state: s, message, info }) => {
   setSimStatus(s, message);
   if (s === 'connected') {
@@ -429,8 +466,7 @@ window.tracker.on('simconnect:status', ({ state: s, message, info }) => {
   } else if (s === 'disconnected') {
     addEvent('info', 'SimConnect disconnected');
     setPhase('idle');
-    // Clear metrics
-    ['m-altitude','m-ias','m-vs','m-hdg','m-gs','m-fuel','m-gforce'].forEach((id) => {
+    ['m-altitude','m-ias','m-vs','m-hdg','m-gs','m-fuel','m-gforce'].forEach(id => {
       $(id).innerHTML = '—';
     });
     $('m-systems').innerHTML = '—';
@@ -443,18 +479,18 @@ window.tracker.on('flight:data', (data) => {
   if (!data) return;
   state.lastData = data;
 
-  // Track route points from renderer side too (for map)
+  // Accumulate route points (throttled by movement)
   const last = state.routePoints[state.routePoints.length - 1];
   if (!last || Math.abs(data.lat - last.lat) > 0.01 || Math.abs(data.lon - last.lon) > 0.01) {
     state.routePoints.push({ lat: data.lat, lon: data.lon, alt: data.altitude });
-    if (state.routePoints.length > 500) state.routePoints.shift(); // cap
+    if (state.routePoints.length > 500) state.routePoints.shift();
   }
 
   updateMetrics(data);
 });
 
-window.tracker.on('flight:phase', ({ phase, prev }) => {
-  setPhase(phase, prev);
+window.tracker.on('flight:phase', ({ phase }) => {
+  setPhase(phase);
 });
 
 window.tracker.on('flight:event', (event) => {
@@ -462,7 +498,12 @@ window.tracker.on('flight:event', (event) => {
     const airport = event.airport || 'unknown';
     addEvent('takeoff', `Takeoff from ${airport} · IAS ${event.ias} kt`);
     depIcao.textContent = airport;
-    state.routePoints = []; // Reset route at takeoff
+
+    // Reset route and place departure marker
+    state.routePoints = [];
+    if (state.lastData) {
+      addDepMarker(state.lastData.lat, state.lastData.lon, airport);
+    }
     startTimer();
   } else if (event.type === 'landing') {
     const airport = event.airport || 'unknown';
@@ -486,8 +527,11 @@ window.tracker.on('api:submit', ({ success, error }) => {
   }
 });
 
+} // end if (window.tracker)
+
 // ── Button handlers ────────────────────────────────────────────────────────
 btnConnect.addEventListener('click', () => {
+  if (!window.tracker) return;
   if (state.simConnected) {
     window.tracker.disconnect();
   } else {
@@ -497,16 +541,15 @@ btnConnect.addEventListener('click', () => {
 });
 
 btnToggleTracking.addEventListener('click', () => {
+  if (!window.tracker) return;
   if (state.tracking) {
     state.tracking = false;
-    btnToggleTracking.innerHTML =
-      `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg> Start Tracking`;
+    btnToggleTracking.innerHTML = '&#9654; Start Tracking';
     window.tracker.stopTracking();
     addEvent('info', 'Tracking stopped manually');
   } else {
     state.tracking = true;
-    btnToggleTracking.innerHTML =
-      `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12"/></svg> Stop Tracking`;
+    btnToggleTracking.innerHTML = '&#9646;&#9646; Stop Tracking';
     window.tracker.startTracking();
     addEvent('info', 'Tracking started');
   }
@@ -526,46 +569,43 @@ $('btn-dismiss-banner').addEventListener('click', () => {
 
 $('link-api-key').addEventListener('click', (e) => {
   e.preventDefault();
-  window.tracker.openExternal('https://simcrewops.com/sim-tracker');
+  if (window.tracker) window.tracker.openExternal('https://simcrewops.com/sim-tracker');
 });
 
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) closeSettings();
 });
 
-// Window controls
-$('btn-minimize').addEventListener('click', () => window.tracker.minimizeWindow());
-$('btn-maximize').addEventListener('click', () => window.tracker.maximizeWindow());
-$('btn-close').addEventListener('click',    () => window.tracker.closeWindow());
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+});
 
-// ── Initialization ─────────────────────────────────────────────────────────
+// Window controls (Electron only)
+$('btn-minimize').addEventListener('click', () => window.tracker?.minimizeWindow());
+$('btn-maximize').addEventListener('click', () => window.tracker?.maximizeWindow());
+$('btn-close').addEventListener('click',    () => window.tracker?.closeWindow());
+
+// ── Initialisation ─────────────────────────────────────────────────────────
 async function init() {
-  // Detect platform
+  // macOS: hide custom window controls, add padding for traffic lights
   if (navigator.platform.toLowerCase().includes('mac')) {
     document.body.classList.add('is-mac');
   }
 
-  // Load initial app state
-  const appState = await window.tracker.getState();
-  if (appState.simConnected) {
-    setSimStatus('connected');
+  if (window.tracker) {
+    // Load initial app state
+    const appState = await window.tracker.getState();
+    if (appState.simConnected) {
+      setSimStatus('connected');
+    }
+
+    // Version
+    const version = await window.tracker.getVersion();
+    versionTag.textContent = `v${version}`;
   }
 
-  // Version
-  const version = await window.tracker.getVersion();
-  versionTag.textContent = `v${version}`;
-
-  // Resize canvas
-  resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
-
-  // Initial draw
-  drawMap();
+  // Init Leaflet map (works in all contexts)
+  initMap();
 }
-
-// CSS keyframe for spinner
-const style = document.createElement('style');
-style.textContent = `@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
-document.head.appendChild(style);
 
 init().catch(console.error);
