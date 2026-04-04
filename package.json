@@ -30,7 +30,6 @@
     },
     "files": [
       "src/**/*",
-      "assets/**/*",
       "node_modules/**/*"
     ],
     "win": {
@@ -39,12 +38,10 @@
           "target": "nsis",
           "arch": ["x64"]
         }
-      ],
-      "icon": "assets/icon.ico"
+      ]
     },
     "mac": {
       "target": "dmg",
-      "icon": "assets/icon.icns",
       "category": "public.app-category.utilities"
     },
     "nsis": {
@@ -53,12 +50,6 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
-    },
-    "extraResources": [
-      {
-        "from": "assets",
-        "to": "assets"
-      }
-    ]
+    }
   }
 }
