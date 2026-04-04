@@ -64,6 +64,20 @@ class ApiClient {
   }
 
   /**
+   * Send a heartbeat so the web app knows the tracker is running.
+   * Called periodically (every ~30 s) by main.js.
+   * Silently ignores errors — heartbeat failure must not disrupt tracking.
+   */
+  async sendHeartbeat() {
+    if (!this._token) return;
+    try {
+      await this._request('POST', '/api/tracker/heartbeat', {});
+    } catch {
+      // intentionally silent
+    }
+  }
+
+  /**
    * Internal HTTP request helper (uses native https/http modules, no axios)
    */
   _request(method, path, body) {
