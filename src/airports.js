@@ -32,7 +32,7 @@ const AIRPORTS = [
   { icao: 'KBWI', lat: 39.1754, lon: -76.6683 }, // Baltimore
   { icao: 'KFLL', lat: 26.0726, lon: -80.1527 }, // Fort Lauderdale
   { icao: 'KSLC', lat: 40.7884, lon: -111.9778 }, // Salt Lake City
-  { icao: 'KIAD', lat: 38.9531, lon: -77.4565 }, // Washington Dulles
+  { icao: 'KIAD', lat: 38.9445, lon: -77.4558 }, // Washington Dulles
   { icao: 'KDCA', lat: 38.8521, lon: -77.0377 }, // Washington Reagan
   { icao: 'KMDW', lat: 41.7868, lon: -87.7522 }, // Chicago Midway
   { icao: 'KSAN', lat: 32.7336, lon: -117.1897 }, // San Diego
