@@ -3,287 +3,278 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" />
+        content="default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com data:; img-src * data: blob:; connect-src 'self' https:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SimCrewOps Tracker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 <div id="app">
 
-  <!-- ── Titlebar (Windows custom chrome) ──────────────────────────────────── -->
+  <!-- ── Custom Titlebar ─────────────────────────────────────────────────── -->
   <div id="titlebar">
-    <div id="titlebar-title">
-      <svg id="titlebar-logo" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="20" cy="20" r="19" fill="#0d1526" stroke="#1e3a5f" stroke-width="1.5"/>
-        <path d="M20 6 L34 28 H6 Z" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round"/>
-        <circle cx="20" cy="20" r="3" fill="#3b82f6"/>
-        <path d="M20 17 L26 26 H14 Z" fill="#3b82f6" opacity="0.3"/>
-      </svg>
-      SimCrewOps Tracker
+    <div id="titlebar-left">
+      <span id="titlebar-logo-text">SimCrewOps</span>
     </div>
-    <div id="titlebar-controls">
-      <button class="title-btn" id="btn-minimize" title="Minimize">&#x2212;</button>
-      <button class="title-btn" id="btn-maximize" title="Maximize">&#x25A1;</button>
-      <button class="title-btn close" id="btn-close" title="Close">&#x2715;</button>
+    <div id="titlebar-right">
+      <div id="conn-status">
+        <div id="conn-dot" class="conn-dot"></div>
+        <span id="conn-label">Disconnected</span>
+      </div>
+      <button class="title-action-btn" id="btn-connect" title="Connect to MSFS">⚡</button>
+      <button class="title-action-btn" id="btn-settings" title="Settings">&#9881;</button>
+      <div id="titlebar-controls">
+        <button class="title-btn" id="btn-minimize" title="Minimize">&#x2212;</button>
+        <button class="title-btn" id="btn-maximize" title="Maximize">&#x25A1;</button>
+        <button class="title-btn close" id="btn-close" title="Close">&#x2715;</button>
+      </div>
     </div>
   </div>
 
-  <!-- ── Main content ───────────────────────────────────────────────────────── -->
-  <div id="main-content">
+  <!-- ── Airline / Flight Header ────────────────────────────────────────── -->
+  <div id="airline-header">
+    <div class="airline-logo" id="airline-logo">✈</div>
+    <div class="airline-name" id="airline-name">SimCrewOps Network</div>
+    <div class="live-badge">LIVE</div>
+    <div class="flight-info-pill">
+      <span id="dep-icao">—</span>
+      <span class="arr-arrow">→</span>
+      <span id="arr-icao">—</span>
+      <span class="flight-timer-small" id="flight-timer">00:00:00</span>
+    </div>
+  </div>
 
-    <!-- Header -->
-    <div id="header">
-      <div id="header-left">
-        <svg id="header-logo" width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="20" cy="20" r="19" fill="#0d1526" stroke="#1e3a5f" stroke-width="1.5"/>
-          <path d="M20 7 L34 29 H6 Z" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round"/>
-          <circle cx="20" cy="20" r="3.5" fill="#3b82f6"/>
-          <path d="M20 17 L27 27 H13 Z" fill="#3b82f6" opacity="0.25"/>
-          <circle cx="20" cy="29" r="2" fill="#10b981"/>
-        </svg>
-        <div id="header-wordmark">
-          <h1>SimCrewOps Tracker</h1>
-          <p>MSFS 2020 / 2024 — SimConnect Bridge</p>
+  <!-- ── Leaflet Map ─────────────────────────────────────────────────────── -->
+  <div id="map-wrapper">
+    <div id="map"></div>
+    <div class="map-legend">
+      <div class="legend-item"><div class="legend-dot you"></div><span id="legend-you-label">You</span></div>
+      <div class="legend-item"><div class="legend-dot route"></div><span>Route track</span></div>
+    </div>
+  </div>
+
+  <!-- ── Main Content ────────────────────────────────────────────────────── -->
+  <div id="content">
+
+    <!-- Phase Scoring -->
+    <div class="phase-card">
+      <div class="phase-header">
+        <div class="phase-title">Flight Phase Scoring</div>
+        <div class="phase-overall">Overall: <span id="overall-score" class="score-val">—</span></div>
+      </div>
+      <div class="phases">
+        <div class="phase" id="ph-preflight">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Pre-Flt</div>
+        </div>
+        <div class="phase" id="ph-taxi_out">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Taxi Out</div>
+        </div>
+        <div class="phase" id="ph-takeoff">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Takeoff</div>
+        </div>
+        <div class="phase" id="ph-climb">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Climb</div>
+        </div>
+        <div class="phase" id="ph-cruise">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Cruise</div>
+        </div>
+        <div class="phase" id="ph-descent">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Descent</div>
+        </div>
+        <div class="phase" id="ph-approach">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Appr</div>
+        </div>
+        <div class="phase" id="ph-landing">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Land</div>
+        </div>
+        <div class="phase" id="ph-taxi_in">
+          <div class="phase-bar"></div>
+          <div class="phase-score">—</div>
+          <div class="phase-name">Taxi In</div>
         </div>
       </div>
-      <div id="header-actions">
-        <div id="sim-status-pill" class="status-pill">
-          <span class="status-dot"></span>
-          <span id="sim-status-label">Disconnected</span>
+    </div>
+
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+      <div class="tab active" data-tab="myflight">✈ My Flight</div>
+      <div class="tab" data-tab="flights">🌐 Flights</div>
+      <div class="tab" data-tab="pireps">⚠ PIREPs</div>
+      <div class="tab" data-tab="acars">✉ ACARS</div>
+    </div>
+
+    <!-- ── My Flight Tab ───────────────────────────────────────────────── -->
+    <div class="tab-panel active" id="tab-myflight">
+
+      <!-- Tracking row -->
+      <div class="tracking-row">
+        <div id="tracking-status-pill">
+          <span class="tpill-dot"></span>
+          <span id="tracking-label">Not Tracking</span>
         </div>
-        <button class="btn btn-sm" id="btn-settings" title="Settings">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
-          </svg>
-          Settings
+        <button class="btn-ghost" id="btn-toggle-tracking" disabled>
+          &#9654; Start Tracking
         </button>
       </div>
-    </div>
 
-    <!-- Connection card -->
-    <div class="card" id="conn-card">
-      <div class="card-header">
-        <div class="card-title">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M5 12.55a11 11 0 0114.08 0"/><path d="M1.42 9a16 16 0 0121.16 0"/><path d="M8.53 16.11a6 6 0 016.95 0"/><circle cx="12" cy="20" r="1"/>
-          </svg>
-          SimConnect
+      <!-- Metrics grid -->
+      <div id="metrics-grid">
+        <div class="metric-card metric-blue">
+          <div class="metric-label">Altitude</div>
+          <div class="metric-value" id="m-altitude">—<span class="metric-unit">ft</span></div>
+          <div class="metric-sub">MSL</div>
         </div>
-      </div>
-      <div class="card-body">
-        <div id="conn-info">
-          <h3 id="conn-title">Not Connected</h3>
-          <p id="conn-desc">Click Connect to link to Microsoft Flight Simulator</p>
+        <div class="metric-card metric-green">
+          <div class="metric-label">Airspeed</div>
+          <div class="metric-value" id="m-ias">—<span class="metric-unit">kt</span></div>
+          <div class="metric-sub">IAS</div>
         </div>
-        <div id="conn-actions">
-          <button class="btn btn-sm" id="btn-toggle-tracking" disabled>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
-            Start Tracking
-          </button>
-          <button class="btn btn-sm btn-primary" id="btn-connect">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>
-            Connect
-          </button>
+        <div class="metric-card metric-amber">
+          <div class="metric-label">Vert Speed</div>
+          <div class="metric-value" id="m-vs">—<span class="metric-unit">fpm</span></div>
+          <div class="metric-sub">Vertical</div>
         </div>
-      </div>
-    </div>
-
-    <!-- Flight phase + route row -->
-    <div id="phase-row">
-      <div id="phase-badge" class="phase-badge idle">
-        <span class="phase-icon">✈</span>
-        <span id="phase-label">Idle</span>
-      </div>
-      <div id="route-info">
-        <span class="icao" id="dep-icao">—</span>
-        <span class="arrow">→</span>
-        <span class="icao" id="arr-icao">—</span>
-      </div>
-      <div style="margin-left:auto; font-size:11px; color:var(--text-muted);">
-        <span id="flight-timer">00:00:00</span>
-      </div>
-    </div>
-
-    <!-- Metrics grid -->
-    <div id="metrics-grid">
-      <div class="metric-card metric-blue">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-          </svg>
-          Altitude
+        <div class="metric-card">
+          <div class="metric-label">Heading</div>
+          <div class="metric-value" id="m-hdg">—<span class="metric-unit">°</span></div>
+          <div class="metric-sub">True</div>
         </div>
-        <div class="metric-value" id="m-altitude">—<span class="metric-unit">ft</span></div>
-        <div class="metric-sub" id="m-altitude-sub">MSL</div>
-      </div>
-
-      <div class="metric-card metric-green">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-          </svg>
-          Airspeed
+        <div class="metric-card">
+          <div class="metric-label">Ground Spd</div>
+          <div class="metric-value" id="m-gs">—<span class="metric-unit">kt</span></div>
+          <div class="metric-sub">GS</div>
         </div>
-        <div class="metric-value" id="m-ias">—<span class="metric-unit">kt</span></div>
-        <div class="metric-sub" id="m-ias-sub">IAS</div>
-      </div>
-
-      <div class="metric-card metric-amber">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="2" x2="12" y2="22"/><polyline points="17 7 12 2 7 7"/><polyline points="17 17 12 22 7 17"/>
-          </svg>
-          Vert Speed
+        <div class="metric-card">
+          <div class="metric-label">Fuel</div>
+          <div class="metric-value" id="m-fuel">—<span class="metric-unit">gal</span></div>
+          <div class="metric-sub">Total</div>
         </div>
-        <div class="metric-value" id="m-vs">—<span class="metric-unit">fpm</span></div>
-        <div class="metric-sub" id="m-vs-sub">Vertical</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-          Heading
+        <div class="metric-card">
+          <div class="metric-label">G-Force</div>
+          <div class="metric-value" id="m-gforce">—<span class="metric-unit">G</span></div>
+          <div class="metric-sub">Current</div>
         </div>
-        <div class="metric-value" id="m-hdg">—<span class="metric-unit">°</span></div>
-        <div class="metric-sub" id="m-hdg-sub">True</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
-          </svg>
-          Ground Spd
-        </div>
-        <div class="metric-value" id="m-gs">—<span class="metric-unit">kt</span></div>
-        <div class="metric-sub" id="m-gs-sub">GS</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-          </svg>
-          Fuel
-        </div>
-        <div class="metric-value" id="m-fuel">—<span class="metric-unit">gal</span></div>
-        <div class="metric-sub" id="m-fuel-sub">Total</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-          </svg>
-          G-Force
-        </div>
-        <div class="metric-value" id="m-gforce">—<span class="metric-unit">G</span></div>
-        <div class="metric-sub" id="m-gforce-sub">Current</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-          </svg>
-          Systems
-        </div>
-        <div class="metric-value" id="m-systems" style="font-size:12px; margin-top:2px;">—</div>
-        <div class="metric-sub" id="m-systems-sub">Gear / Flaps / AP</div>
-      </div>
-    </div>
-
-    <!-- Completed flight banner -->
-    <div id="flight-complete-banner">
-      <div class="banner-icon">🛬</div>
-      <div class="banner-content">
-        <div class="banner-title" id="banner-title">Flight Complete</div>
-        <div class="banner-detail" id="banner-detail">—</div>
-        <div class="banner-actions">
-          <button class="btn btn-sm btn-primary" id="btn-submit-flight">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
-            Submit to SimCrewOps
-          </button>
-          <button class="btn btn-sm" id="btn-dismiss-banner">Dismiss</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Lower grid: map + events -->
-    <div id="lower-grid">
-
-      <!-- Mini map -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/>
-            </svg>
-            Route Map
-          </div>
-          <span id="map-coords" style="font-size:10px; color:var(--text-muted);">—</span>
-        </div>
-        <div class="card-body" style="padding: 10px;">
-          <canvas id="map-canvas"></canvas>
+        <div class="metric-card">
+          <div class="metric-label">Systems</div>
+          <div class="metric-value" id="m-systems" style="font-size:11px; margin-top:2px;">—</div>
+          <div class="metric-sub">Gear / Flaps / AP</div>
         </div>
       </div>
 
       <!-- Event log -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
-            </svg>
-            Flight Events
-          </div>
+      <div class="v4-card">
+        <div class="v4-card-header">
+          <div class="v4-card-title">Flight Events</div>
         </div>
-        <div class="card-body" style="padding: 10px;">
-          <div id="event-log">
-            <div class="event-placeholder">No events yet — connect to MSFS to begin</div>
-          </div>
+        <div id="event-log">
+          <div class="event-placeholder">No events yet — connect to MSFS to begin</div>
         </div>
       </div>
 
-    </div>
+    </div><!-- /tab-myflight -->
 
-  </div><!-- /main-content -->
-
-  <!-- ── Bottom bar ────────────────────────────────────────────────────────── -->
-  <div id="bottom-bar">
-    <div id="bottom-left">
-      <div id="tracking-status-pill" class="status-pill">
-        <span class="status-dot"></span>
-        <span id="tracking-label">Not Tracking</span>
+    <!-- ── Flights Tab ────────────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-flights">
+      <div class="flight-board">
+        <div class="board-header">
+          <div class="board-title">Live Flight Board</div>
+          <div class="board-count" id="board-count">— Active Flights</div>
+        </div>
+        <div id="flight-board-body">
+          <div class="board-empty">Connect to SimCrewOps to see live network flights</div>
+        </div>
       </div>
     </div>
-    <div id="bottom-right">
-      <span id="last-update" class="version-tag"></span>
+
+    <!-- ── PIREPs Tab ─────────────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-pireps">
+      <div class="pirep-panel">
+        <div class="pirep-header">
+          <div class="pirep-title">Pilot Weather Reports</div>
+          <div class="pirep-badge">Network</div>
+        </div>
+        <div class="pirep-list" id="pirep-list">
+          <div class="board-empty">No PIREPs available — connect to view reports</div>
+        </div>
+        <div class="pirep-submit" id="btn-pirep-submit">
+          <span class="pirep-submit-icon">+</span>
+          <span>Submit a PIREP</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ACARS Tab ──────────────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-acars">
+      <div class="acars-panel">
+        <div class="acars-header">
+          <div class="acars-title">ACARS Messages</div>
+          <div class="acars-unread" id="acars-unread" style="display:none">0</div>
+        </div>
+        <div class="acars-messages" id="acars-messages">
+          <div class="board-empty">No messages — connect to SimCrewOps</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+
+  <!-- ── Flight Complete Banner ──────────────────────────────────────────── -->
+  <div id="flight-complete-banner">
+    <div class="banner-icon">🛬</div>
+    <div class="banner-body">
+      <div class="banner-title" id="banner-title">Flight Complete</div>
+      <div class="banner-detail" id="banner-detail">—</div>
+      <div class="banner-actions">
+        <button class="btn-primary-v4" id="btn-submit-flight">
+          &#9658; Submit to SimCrewOps
+        </button>
+        <button class="btn-ghost" id="btn-dismiss-banner">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Status Bar ──────────────────────────────────────────────────────── -->
+  <div id="status-bar">
+    <div class="sync-status">
+      <div class="spinner" id="sync-spinner" style="display:none"></div>
+      <span id="status-text">Not connected to MSFS</span>
+    </div>
+    <div class="status-right">
+      <span id="map-coords" style="font-size:9px; color:rgba(255,255,255,0.25);">—</span>
+      <span id="last-update" style="font-size:9px; color:rgba(255,255,255,0.2);"></span>
       <span class="version-tag" id="version-tag">v1.0.0</span>
     </div>
   </div>
 
 </div><!-- /app -->
 
-<!-- ── Settings overlay ──────────────────────────────────────────────────────── -->
+<!-- ── Settings Overlay ──────────────────────────────────────────────────── -->
 <div id="settings-overlay">
   <div id="settings-panel">
     <div id="settings-header">
       <h2>Tracker Settings</h2>
-      <button class="btn btn-sm" id="btn-settings-close">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
+      <button class="btn-ghost" id="btn-settings-close">&#x2715;</button>
     </div>
     <div id="settings-body">
+
       <div class="form-group">
         <label>SimCrewOps Server URL</label>
         <input class="form-input" type="url" id="inp-api-url" placeholder="https://simcrewops.com" />
@@ -318,15 +309,17 @@
       </div>
 
       <div id="verify-status" style="display:none; padding:8px 12px; border-radius:6px; font-size:11px;"></div>
+
     </div>
     <div class="settings-footer">
-      <button class="btn btn-sm" id="btn-verify-token">Verify Key</button>
-      <button class="btn btn-sm" id="btn-settings-cancel">Cancel</button>
-      <button class="btn btn-sm btn-primary" id="btn-settings-save">Save</button>
+      <button class="btn-ghost" id="btn-verify-token">Verify Key</button>
+      <button class="btn-ghost" id="btn-settings-cancel">Cancel</button>
+      <button class="btn-primary-v4" id="btn-settings-save">Save Settings</button>
     </div>
   </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>
