@@ -30,6 +30,7 @@ let simManager = null;
 let flightTracker = null;
 let apiClient = null;
 let isQuitting = false;
+let heartbeatInterval = null;
 
 // ── Create tray icon programmatically ─────────────────────────────────────────
 function createTrayIcon(status = 'idle') {
@@ -332,6 +333,18 @@ app.on('ready', async () => {
   registerIpcHandlers();
   createWindow();
   createTray();
+
+  // Send a heartbeat to the web app every 30 s so the Sim Tracker page can
+  // show a real "connected" status instead of always showing "disconnected".
+  heartbeatInterval = setInterval(() => {
+    if (apiClient && store.get('apiToken')) {
+      apiClient.sendHeartbeat();
+    }
+  }, 30_000);
+  // Also send one immediately on startup so the status updates right away.
+  if (apiClient && store.get('apiToken')) {
+    apiClient.sendHeartbeat();
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -346,6 +359,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
   if (simManager) simManager.disconnect();
 });
 
