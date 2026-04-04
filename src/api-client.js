@@ -31,16 +31,19 @@ class ApiClient {
     }
 
     const body = {
-      sessionDate:  flightRecord.sessionDate ?? new Date().toISOString().split('T')[0],
-      aircraft:     flightRecord.aircraft     ?? 'UNKN',
-      departure:    flightRecord.departure    ?? null,
-      arrival:      flightRecord.arrival      ?? null,
-      duration:     Math.max(1, flightRecord.duration ?? 1),
-      landingRate:  flightRecord.landingRate  ?? null,
-      maxAltitude:  flightRecord.maxAltitude  ?? null,
-      maxGForce:    flightRecord.maxGForce    ?? null,
-      simVersion:   flightRecord.simVersion   ?? 'MSFS 2024',
-      source:       'simconnect',
+      sessionDate:      flightRecord.sessionDate      ?? new Date().toISOString().split('T')[0],
+      aircraft:         flightRecord.aircraft          ?? 'UNKN',
+      departure:        flightRecord.departure         ?? null,
+      arrival:          flightRecord.arrival           ?? null,
+      duration:         Math.max(1, flightRecord.duration ?? 1),
+      airTime:          flightRecord.airTime           ?? null,  // hours wheels-up to wheels-down
+      groundTime:       flightRecord.groundTime        ?? null,  // hours on ground (block minus air)
+      landingRate:      flightRecord.landingRate       ?? null,
+      touchdownZoneHit: flightRecord.touchdownZoneHit ?? null,  // bool: landed in first 1000-1500ft
+      maxAltitude:      flightRecord.maxAltitude       ?? null,
+      maxGForce:        flightRecord.maxGForce         ?? null,
+      simVersion:       flightRecord.simVersion        ?? 'MSFS 2024',
+      source:           'simconnect',
     };
 
     const response = await this._request('POST', '/api/sim-sessions', body);

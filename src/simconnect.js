@@ -72,6 +72,7 @@ class SimConnectManager extends EventEmitter {
       handle.addToDataDefinition(DEF_ID, 'PLANE LATITUDE',              'degrees',          d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'PLANE LONGITUDE',             'degrees',          d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'PLANE ALTITUDE',              'feet',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE ALT ABOVE GROUND',      'feet',             d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'PLANE HEADING DEGREES TRUE',  'degrees',          d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'AIRSPEED INDICATED',          'knots',            d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'GROUND VELOCITY',             'knots',            d.FLOAT64);
@@ -152,6 +153,7 @@ class SimConnectManager extends EventEmitter {
         lat:         buf.readFloat64(),
         lon:         buf.readFloat64(),
         altitude:    Math.round(buf.readFloat64()),
+        altAgl:      Math.round(buf.readFloat64()),   // feet above ground level
         heading:     Math.round(buf.readFloat64()),
         ias:         Math.round(buf.readFloat64()),
         groundSpeed: Math.round(buf.readFloat64()),
