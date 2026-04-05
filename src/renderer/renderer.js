@@ -380,25 +380,20 @@ async function verifyToken() {
 
   try {
     if (!window.tracker) throw new Error('Not running in Electron');
-    await window.tracker.submitFlight({
-      sessionDate: new Date().toISOString().split('T')[0],
-      aircraft:    'TEST',
-      duration:    1,
-      simVersion:  'MSFS 2024',
-    });
-    status.style.background = 'rgba(74,222,128,0.1)';
-    status.style.color      = '#34d399';
-    status.textContent      = '✓ API key is valid and connected';
-  } catch (err) {
-    if (err.message?.includes('token') || err.message?.includes('Unauthorized')) {
+    const result = await window.tracker.verifyToken();
+    if (result.success) {
+      status.style.background = 'rgba(74,222,128,0.1)';
+      status.style.color      = '#34d399';
+      status.textContent      = '✓ API key is valid and connected';
+    } else {
       status.style.background = 'rgba(248,113,113,0.1)';
       status.style.color      = '#f87171';
-      status.textContent      = '✗ Invalid API key — check your SimCrewOps settings';
-    } else {
-      status.style.background = 'rgba(250,204,21,0.1)';
-      status.style.color      = '#fcd34d';
-      status.textContent      = `⚠ ${err.message}`;
+      status.textContent      = `✗ ${result.error || 'Invalid API key — check your SimCrewOps settings'}`;
     }
+  } catch (err) {
+    status.style.background = 'rgba(250,204,21,0.1)';
+    status.style.color      = '#fcd34d';
+    status.textContent      = `⚠ ${err.message}`;
   }
 }
 

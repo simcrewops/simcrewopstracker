@@ -109,6 +109,16 @@ class FlightTracker extends EventEmitter {
     this._touchdownPos         = null; // { lat, lon } at touchdown
     this._touchdownZoneHit     = false;
 
+    // Bounce detection
+    this._bounces          = [];       // [{ timestamp, airTimeMs }]
+    this._lastLiftoffTime  = null;     // ms timestamp of last liftoff (for bounce window)
+
+    // Tail strike & touchdown details
+    this._tailStrike           = false;
+    this._tailStrikeTimestamp  = null;
+    this._touchdownPitch       = 0;
+    this._touchdownGForce      = 0;
+
     this._airports = new Airports();
   }
 
@@ -159,6 +169,25 @@ class FlightTracker extends EventEmitter {
       if (agl < THRESHOLD_AGL_FT && this._thresholdCrossedPos === null) {
         this._thresholdCrossedPos = { lat: data.lat, lon: data.lon };
       }
+    }
+
+    // Bounce detection: track liftoff/touchdown transitions after initial takeoff
+    if (!data.onGround && this._prevOnGround && this._wheelsUpTime !== null) {
+      // Re-airborne after a previous takeoff — could be a bounce
+      this._lastLiftoffTime = Date.now();
+    }
+    if (data.onGround && !this._prevOnGround && this._lastLiftoffTime !== null) {
+      const timeAirborne = Date.now() - this._lastLiftoffTime;
+      if (timeAirborne < 3000) {
+        this._bounces.push({ timestamp: Date.now(), airTimeMs: timeAirborne });
+      }
+      this._lastLiftoffTime = null;
+    }
+
+    // Tail strike detection: pitch > 12° while on the ground
+    if (data.onGround && data.pitch !== undefined && data.pitch > 12 && !this._tailStrike) {
+      this._tailStrike = true;
+      this._tailStrikeTimestamp = Date.now();
     }
 
     this._runStateMachine(data);
@@ -274,6 +303,14 @@ class FlightTracker extends EventEmitter {
     this._arrivalIcao    = this._airports.nearest(d.lat, d.lon);
     this._fuelAtEnd      = d.fuelGallons;
     this._touchdownPos   = { lat: d.lat, lon: d.lon };
+    this._touchdownPitch  = d.pitch  ?? 0;
+    this._touchdownGForce = d.gForce ?? 0;
+
+    // Tail strike: also catch high pitch exactly at touchdown
+    if (d.pitch !== undefined && d.pitch > 12 && !this._tailStrike) {
+      this._tailStrike = true;
+      this._tailStrikeTimestamp = Date.now();
+    }
 
     // Determine touchdown zone hit
     if (this._thresholdCrossedPos) {
@@ -335,6 +372,11 @@ class FlightTracker extends EventEmitter {
       groundTime:       groundTimeHours,      // hours
       landingRate:      Math.round(this._touchdownVs),
       touchdownZoneHit: this._touchdownZoneHit,
+      touchdownPitch:   this._touchdownPitch,
+      touchdownGForce:  this._touchdownGForce,
+      bounces:          this._bounces.length,
+      bounceTimestamps: this._bounces.map(b => b.timestamp),
+      tailStrike:       this._tailStrike,
       maxAltitude:      this._maxAlt,
       maxGForce:        Math.round(this._maxGForce * 100) / 100,
       fuelUsed,
@@ -373,6 +415,12 @@ class FlightTracker extends EventEmitter {
     this._thresholdCrossedPos = null;
     this._touchdownPos       = null;
     this._touchdownZoneHit   = false;
+    this._touchdownPitch     = 0;
+    this._touchdownGForce    = 0;
+    this._bounces            = [];
+    this._lastLiftoffTime    = null;
+    this._tailStrike         = false;
+    this._tailStrikeTimestamp = null;
 
     this._blockOutTime = savedBlockOut;
   }
@@ -382,6 +430,13 @@ class FlightTracker extends EventEmitter {
     const prev = this._phase;
     this._phase = phase;
     this.emit('phase', { phase, prev });
+
+    // High-frequency polling: enable near landing, disable once clear
+    if (phase === PHASE.APPROACH) {
+      this.emit('highFreq', { enabled: true });
+    } else if (phase === PHASE.POST_FLIGHT || phase === PHASE.TAXI) {
+      this.emit('highFreq', { enabled: false });
+    }
   }
 
   getCurrentPhase() {

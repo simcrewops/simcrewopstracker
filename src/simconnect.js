@@ -18,6 +18,7 @@ const DEF_ID = 0;
 // SimConnect request IDs
 const REQ_ID_PERIODIC = 0;
 const REQ_ID_ONCE     = 1;
+const REQ_ID_HIGHFREQ = 2;
 
 // Reconnect delay in ms
 const RECONNECT_DELAY = 5000;
@@ -25,10 +26,12 @@ const RECONNECT_DELAY = 5000;
 class SimConnectManager extends EventEmitter {
   constructor() {
     super();
-    this._handle       = null;
-    this._connected    = false;
-    this._reconnecting = false;
-    this._stopReconnect = false;
+    this._handle           = null;
+    this._connected        = false;
+    this._reconnecting     = false;
+    this._stopReconnect    = false;
+    this._highFreqMode     = false;
+    this._SimConnectPeriod = null;
   }
 
   isConnected() {
@@ -59,6 +62,9 @@ class SimConnectManager extends EventEmitter {
         SimObjectType,
       } = nodeSimConnect;
 
+      // Store for use by setHighFreqMode()
+      this._SimConnectPeriod = SimConnectPeriod;
+
       // Try MSFS 2024 (FSX_SP2) first, fall back to FSX_SP2 which covers 2020 too
       const { recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.KittyHawk);
       this._handle = handle;
@@ -85,6 +91,7 @@ class SimConnectManager extends EventEmitter {
       handle.addToDataDefinition(DEF_ID, 'FUEL TOTAL QUANTITY',         'gallons',          d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'G FORCE',                     'gforce',           d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'AUTOPILOT MASTER',            'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE PITCH DEGREES',         'degrees',          d.FLOAT64);
 
       // Request data every sim second (SECOND period)
       handle.requestDataOnSimObject(
@@ -100,9 +107,12 @@ class SimConnectManager extends EventEmitter {
 
       // ── Event handlers ────────────────────────────────────────────────────
       handle.on('simObjectData', (recv) => {
-        if (recv.requestID !== REQ_ID_PERIODIC) return;
+        if (recv.requestID !== REQ_ID_PERIODIC && recv.requestID !== REQ_ID_HIGHFREQ) return;
         const data = this._parseSimData(recv.data);
-        if (data) this.emit('data', data);
+        if (data) {
+          if (recv.requestID === REQ_ID_HIGHFREQ) data.highFreq = true;
+          this.emit('data', data);
+        }
       });
 
       handle.on('exception', (recv) => {
@@ -163,6 +173,7 @@ class SimConnectManager extends EventEmitter {
         fuelGallons: Math.round(buf.readFloat64() * 10) / 10,
         gForce:      Math.round(buf.readFloat64() * 100) / 100,
         autopilot:   buf.readFloat64() > 0.5,
+        pitch:       Math.round(buf.readFloat64() * 10) / 10,  // degrees, positive = nose up
         timestamp:   Date.now(),
       };
     } catch (err) {
@@ -189,6 +200,27 @@ class SimConnectManager extends EventEmitter {
           this._connect();
         }
       }, RECONNECT_DELAY);
+    }
+  }
+
+  /**
+   * Switch between 1 Hz normal polling and ~100 ms high-frequency polling.
+   * Call with enabled=true when entering approach; false when leaving landing phase.
+   */
+  setHighFreqMode(enabled) {
+    if (!this._handle || !this._connected || !this._SimConnectPeriod) return;
+    if (this._highFreqMode === enabled) return;
+    this._highFreqMode = enabled;
+
+    const P = this._SimConnectPeriod;
+    if (enabled) {
+      // Pause 1 Hz stream; start high-freq stream (~100 ms at 60 fps = 6 frames)
+      this._handle.requestDataOnSimObject(REQ_ID_PERIODIC, DEF_ID, 0, P.NEVER, 0, 0, 0, 0);
+      this._handle.requestDataOnSimObject(REQ_ID_HIGHFREQ, DEF_ID, 0, P.SIM_FRAME, 0, 0, 6, 0);
+    } else {
+      // Stop high-freq stream; resume 1 Hz stream
+      this._handle.requestDataOnSimObject(REQ_ID_HIGHFREQ, DEF_ID, 0, P.NEVER, 0, 0, 0, 0);
+      this._handle.requestDataOnSimObject(REQ_ID_PERIODIC, DEF_ID, 0, P.SECOND, 0, 0, 0, 0);
     }
   }
 

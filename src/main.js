@@ -216,6 +216,10 @@ function setupFlightTrackerListeners() {
     sendToRenderer('flight:event', { type: 'landing', ...event });
   });
 
+  flightTracker.on('highFreq', ({ enabled }) => {
+    if (simManager) simManager.setHighFreqMode(enabled);
+  });
+
   flightTracker.on('flightComplete', async (flightRecord) => {
     sendToRenderer('flight:complete', flightRecord);
     updateTrayMenu('connected');
@@ -284,8 +288,27 @@ function registerIpcHandlers() {
     }
   });
 
-  // Open external links
-  ipcMain.on('open:external', (_, url) => shell.openExternal(url));
+  // Token verification
+  ipcMain.handle('api:verifyToken', async () => {
+    if (!apiClient) return { success: false, error: 'API client not initialized' };
+    const token = store.get('apiToken');
+    if (!token) return { success: false, error: 'No API token configured' };
+    try {
+      const valid = await apiClient.verifyToken();
+      return valid
+        ? { success: true }
+        : { success: false, error: 'Invalid API key — check your SimCrewOps settings' };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Open external links (validated to http/https only)
+  ipcMain.on('open:external', (_, url) => {
+    if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
+      shell.openExternal(url);
+    }
+  });
 
   // App info
   ipcMain.handle('app:version', () => app.getVersion());

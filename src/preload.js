@@ -17,7 +17,8 @@ contextBridge.exposeInMainWorld('tracker', {
   saveSettings: (settings)   => ipcRenderer.invoke('settings:save', settings),
 
   // ── API ──
-  submitFlight: (record)     => ipcRenderer.invoke('api:submitFlight', record),
+  submitFlight:  (record)    => ipcRenderer.invoke('api:submitFlight', record),
+  verifyToken:   ()          => ipcRenderer.invoke('api:verifyToken'),
 
   // ── Window controls ──
   minimizeWindow: ()  => ipcRenderer.send('window:minimize'),
