@@ -1,131 +1,112 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 
-// ── Persistent settings store ─────────────────────────────────────────────────
+app.allowRendererProcessReuse = true;
+
+// ── Persistent settings ───────────────────────────────────────────────────────
 const store = new Store({
   name: 'simcrewops-tracker',
   defaults: {
-    apiUrl: 'https://simcrewops.com',
-    apiToken: '',
-    autoConnect: true,
+    apiUrl:         'https://simcrewops.com',
+    apiToken:       '',
+    autoConnect:    true,
     minimizeToTray: true,
-    windowBounds: { width: 900, height: 680 },
+    windowBounds:   { width: 900, height: 680 },
   },
 });
 
-// ── Module imports (after app path is set) ────────────────────────────────────
+// ── Module refs ───────────────────────────────────────────────────────────────
 let SimConnectManager = null;
-let FlightTracker = null;
-let ApiClient = null;
-let ScoringCollector = null;
+let FlightTracker     = null;
+let ApiClient         = null;
 
-let mainWindow = null;
-let tray = null;
-let simManager = null;
-let flightTracker = null;
-let apiClient = null;
-let acarsClient = null;
-let scoringCollector = null;
-let isQuitting = false;
+let mainWindow     = null;
+let tray           = null;
+let simManager     = null;
+let flightTracker  = null;
+let apiClient      = null;
+let isQuitting     = false;
 let heartbeatInterval = null;
-let lastSimData = null;  // most recent data frame; used for phase-change context
 
-// Messages queued while the renderer is still loading
-const rendererQueue = [];
+// ── IPC throttle state ────────────────────────────────────────────────────────
+// Batches flight:data to the renderer at ≤5 Hz (every 200ms) so the renderer
+// and the IPC bridge aren't flooded on every SimConnect tick.
+let _pendingFlightData  = null;
+let _ipcFlushTimer      = null;
+const IPC_FLUSH_MS      = 200;   // max 5 UI updates per second
 
-// ── Tray icon cache ───────────────────────────────────────────────────────────
-// All 5 status icons are built once at startup so updateTrayMenu() never calls
-// canvas or nativeImage on the hot path.
-const trayIconCache = {};
-let lastTrayStatus  = null;
+function scheduleIpcFlush() {
+  if (_ipcFlushTimer) return;
+  _ipcFlushTimer = setTimeout(() => {
+    _ipcFlushTimer = null;
+    if (_pendingFlightData !== null) {
+      sendToRenderer('flight:data', _pendingFlightData);
+      _pendingFlightData = null;
+    }
+  }, IPC_FLUSH_MS);
+}
 
-const TRAY_COLORS = {
-  idle:       '#64748b',
-  connecting: '#f59e0b',
-  connected:  '#10b981',
-  tracking:   '#3b82f6',
-  error:      '#ef4444',
-};
+function cancelIpcFlush() {
+  if (_ipcFlushTimer) {
+    clearTimeout(_ipcFlushTimer);
+    _ipcFlushTimer = null;
+  }
+  _pendingFlightData = null;
+}
 
-function _nativeImageFallback() {
+// ── Tray icon ─────────────────────────────────────────────────────────────────
+function createTrayIcon(status = 'idle') {
+  const colors = {
+    idle:       '#64748b',
+    connecting: '#f59e0b',
+    connected:  '#10b981',
+    tracking:   '#3b82f6',
+    error:      '#ef4444',
+  };
+  const color = colors[status] || colors.idle;
+
+  const { createCanvas } = (() => {
+    try { return require('canvas'); } catch { return null; }
+  })() || {};
+
+  if (createCanvas) {
+    const canvas = createCanvas(16, 16);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 16, 16);
+    ctx.beginPath();
+    ctx.arc(8, 8, 7, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    return nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
+  }
+
   return nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAA' +
     'JklEQVQ4jWNgYGD4z8BQDwAAAP//AwBDAAEA8P8AAAD//wMAQwABAPD/AAAAA=='
   );
 }
 
-function buildTrayIconCache() {
-  const { createCanvas, loadImage } = (() => {
-    try { return require('canvas'); } catch { return {}; }
-  })();
-
-  // ── Step 1: build colored-circle fallbacks synchronously ──────────────────
-  if (createCanvas) {
-    for (const [status, color] of Object.entries(TRAY_COLORS)) {
-      const canvas = createCanvas(16, 16);
-      const ctx    = canvas.getContext('2d');
-      ctx.clearRect(0, 0, 16, 16);
-      ctx.beginPath();
-      ctx.arc(8, 8, 7, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
-      trayIconCache[status] = nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
-    }
-  } else {
-    const fb = _nativeImageFallback();
-    for (const status of Object.keys(TRAY_COLORS)) trayIconCache[status] = fb;
-  }
-
-  // ── Step 2: async upgrade — real logo + small status dot ──────────────────
-  if (createCanvas && loadImage) {
-    const logoPath = path.join(__dirname, '..', '..', 'public', 'logo-icon-transparent.png');
-    loadImage(logoPath).then((logo) => {
-      const SZ = 22;
-      for (const [status, color] of Object.entries(TRAY_COLORS)) {
-        const canvas = createCanvas(SZ, SZ);
-        const ctx    = canvas.getContext('2d');
-        ctx.clearRect(0, 0, SZ, SZ);
-        ctx.drawImage(logo, 0, 0, SZ, SZ);
-        // Small status-indicator dot in bottom-right corner
-        const r = 5;
-        ctx.beginPath();
-        ctx.arc(SZ - r - 1, SZ - r - 1, r, 0, Math.PI * 2);
-        ctx.fillStyle   = color;
-        ctx.fill();
-        ctx.strokeStyle = '#0a0f1a';
-        ctx.lineWidth   = 1.5;
-        ctx.stroke();
-        trayIconCache[status] = nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
-      }
-      // Refresh tray with the better icon now that cache is updated
-      if (tray && lastTrayStatus) {
-        tray.setImage(trayIconCache[lastTrayStatus] ?? trayIconCache.idle);
-      }
-    }).catch(() => { /* keep circle fallbacks */ });
-  }
-}
-
-// ── Create main window ────────────────────────────────────────────────────────
+// ── Main window ───────────────────────────────────────────────────────────────
 function createWindow() {
   const bounds = store.get('windowBounds');
 
   mainWindow = new BrowserWindow({
-    width: bounds.width,
-    height: bounds.height,
-    minWidth: 760,
+    width:     bounds.width,
+    height:    bounds.height,
+    minWidth:  760,
     minHeight: 560,
     backgroundColor: '#0a0f1a',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    frame: process.platform !== 'darwin',
-    show: false,
+    frame:     process.platform !== 'darwin',
+    show:      false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload:          path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
+      nodeIntegration:  false,
+      sandbox:          false,
     },
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
   });
@@ -134,25 +115,14 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    // Flush any messages queued before the renderer was ready
-    const wc = mainWindow.webContents;
-    while (rendererQueue.length > 0) {
-      const msg = rendererQueue.shift();
-      wc.send(msg.channel, msg.data);
-    }
-    // Auto-connect if enabled
     if (store.get('autoConnect') && simManager) {
       setTimeout(() => attemptSimConnect(), 1000);
     }
   });
 
-  let _resizeTimer = null;
   mainWindow.on('resize', () => {
-    clearTimeout(_resizeTimer);
-    _resizeTimer = setTimeout(() => {
-      const [width, height] = mainWindow.getSize();
-      store.set('windowBounds', { width, height });
-    }, 500);
+    const [width, height] = mainWindow.getSize();
+    store.set('windowBounds', { width, height });
   });
 
   mainWindow.on('close', (e) => {
@@ -168,29 +138,23 @@ function createWindow() {
   });
 }
 
-// ── Create system tray ────────────────────────────────────────────────────────
+// ── System tray ───────────────────────────────────────────────────────────────
 function createTray() {
-  buildTrayIconCache();
-  tray = new Tray(trayIconCache.idle ?? _nativeImageFallback());
+  const icon = createTrayIcon('idle');
+  tray = new Tray(icon);
   tray.setToolTip('SimCrewOps Tracker');
-  lastTrayStatus = 'idle';
-
   updateTrayMenu('idle');
 
   tray.on('click', () => {
     if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.focus();
-      } else {
-        mainWindow.show();
-      }
+      if (mainWindow.isVisible()) mainWindow.focus();
+      else mainWindow.show();
     }
   });
 }
 
 function updateTrayMenu(status) {
   if (!tray) return;
-
   const menu = Menu.buildFromTemplate([
     { label: 'SimCrewOps Tracker', enabled: false },
     { label: `Status: ${status.charAt(0).toUpperCase() + status.slice(1)}`, enabled: false },
@@ -202,36 +166,18 @@ function updateTrayMenu(status) {
     { type: 'separator' },
     {
       label: 'Quit',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      },
+      click: () => { isQuitting = true; app.quit(); },
     },
   ]);
   tray.setContextMenu(menu);
-
-  // Only swap the image when the status actually changed
-  if (status !== lastTrayStatus) {
-    tray.setImage(trayIconCache[status] ?? trayIconCache.idle ?? _nativeImageFallback());
-    lastTrayStatus = status;
-  }
+  tray.setImage(createTrayIcon(status));
 }
 
-// ── SimConnect connection management ──────────────────────────────────────────
+// ── IPC helpers ───────────────────────────────────────────────────────────────
 function sendToRenderer(channel, data) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const wc = mainWindow.webContents;
-  if (wc.isLoading()) {
-    // Queue until the renderer is ready; cap at 200 messages to bound memory
-    if (rendererQueue.length < 200) rendererQueue.push({ channel, data });
-    return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data);
   }
-  // Flush any queued messages first (preserves ordering)
-  while (rendererQueue.length > 0) {
-    const msg = rendererQueue.shift();
-    wc.send(msg.channel, msg.data);
-  }
-  wc.send(channel, data);
 }
 
 function attemptSimConnect() {
@@ -240,38 +186,24 @@ function attemptSimConnect() {
   simManager.connect();
 }
 
-function startHeartbeat() {
-  if (heartbeatInterval) return; // already running
-  const token = store.get('apiToken');
-  if (!token || !apiClient) return;
-  apiClient.sendHeartbeat(); // immediate ping
-  heartbeatInterval = setInterval(() => {
-    if (apiClient && store.get('apiToken')) apiClient.sendHeartbeat();
-  }, 30_000);
-}
-
-function stopHeartbeat() {
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
-}
-
+// ── SimConnect listener wiring ────────────────────────────────────────────────
 function setupSimConnectListeners() {
   simManager.on('connected', (info) => {
     sendToRenderer('simconnect:status', { state: 'connected', info });
     updateTrayMenu('connected');
+    // Pass engine count to tracker before starting
+    // Engine count arrives in first data tick; set 2 as default initially
+    flightTracker.setEngineCount(2);
     flightTracker.start();
-    startHeartbeat();
   });
 
   simManager.on('disconnected', () => {
+    cancelIpcFlush();
     sendToRenderer('simconnect:status', { state: 'disconnected' });
     updateTrayMenu('idle');
     flightTracker.stop();
     sendToRenderer('flight:data', null);
     sendToRenderer('flight:phase', { phase: 'idle' });
-    stopHeartbeat();
   });
 
   simManager.on('error', (err) => {
@@ -279,43 +211,37 @@ function setupSimConnectListeners() {
     updateTrayMenu('error');
   });
 
+  // 1 Hz main data — process in tracker then batch-send to renderer
   simManager.on('data', (flightData) => {
-    lastSimData = flightData;
-
-    // Scoring collector sees data BEFORE the phase may change
-    if (scoringCollector) {
-      scoringCollector.onData(flightData, flightTracker.getCurrentPhase());
+    // Update engine count from first real data tick
+    if (flightData.engineCount && flightData.engineCount !== flightTracker._engineCount) {
+      flightTracker.setEngineCount(flightData.engineCount);
     }
 
     flightTracker.update(flightData);
-    sendToRenderer('flight:data', flightData);
 
-    // Keep ACARS client updated with position for PIREP proximity
-    if (acarsClient && flightData) {
-      acarsClient.updatePosition({
-        lat: flightData.lat,
-        lon: flightData.lon,
-        altitude: flightData.altitude,
-      });
-    }
+    // Batch IPC update at ≤5 Hz
+    _pendingFlightData = flightData;
+    scheduleIpcFlush();
+  });
+
+  // High-frequency landing data (100ms, only during approach/landing)
+  simManager.on('landingData', (lfd) => {
+    flightTracker.processLandingTick(lfd);
+    // Send HF data to renderer immediately (already 100ms throttled by SimConnect)
+    sendToRenderer('flight:hf', lfd);
   });
 }
 
+// ── FlightTracker listener wiring ─────────────────────────────────────────────
 function setupFlightTrackerListeners() {
-  flightTracker.on('phase', (phase) => {
-    // Notify scoring collector of the phase transition (with current data frame)
-    if (scoringCollector) {
-      scoringCollector.onPhaseChange(phase.phase, phase.prev, lastSimData);
-    }
-
-    sendToRenderer('flight:phase', phase);
-    if (phase.phase === 'tracking' || phase.phase === 'cruise') {
+  flightTracker.on('phase', (phaseEvent) => {
+    sendToRenderer('flight:phase', phaseEvent);
+    const p = phaseEvent.phase;
+    if (p === 'climb' || p === 'cruise' || p === 'descent' || p === 'approach') {
       updateTrayMenu('tracking');
-    }
-
-    // Trigger ACARS message fetch on phase transitions
-    if (acarsClient) {
-      acarsClient.onPhaseChange(phase.phase);
+    } else if (p === 'idle' || p === 'preflight') {
+      updateTrayMenu(simManager?.isConnected() ? 'connected' : 'idle');
     }
   });
 
@@ -327,19 +253,27 @@ function setupFlightTrackerListeners() {
     sendToRenderer('flight:event', { type: 'landing', ...event });
   });
 
-  flightTracker.on('flightComplete', async (flightRecord) => {
-    // Attach scoring input from the collector before submitting
-    if (scoringCollector) {
-      flightRecord.scoringInput = scoringCollector.getScoreInput();
-      scoringCollector.reset();
+  // High-freq mode toggle: tell SimConnect to start/stop 100ms polling
+  flightTracker.on('highFreq', ({ enabled }) => {
+    if (simManager?.isConnected()) {
+      simManager.setHighFreqMode(enabled);
     }
+  });
 
+  flightTracker.on('flightComplete', async (flightRecord) => {
+    // Send to renderer first so debrief shows immediately
     sendToRenderer('flight:complete', flightRecord);
     updateTrayMenu('connected');
 
-    // Auto-submit if token is configured
     const token = store.get('apiToken');
-    if (token) {
+    if (!token) return;
+
+    // Try to score via V5 endpoint, fall back to standard submit
+    try {
+      const debrief = await apiClient.scoreFlight(flightRecord);
+      sendToRenderer('flight:debrief', { success: true, data: debrief });
+    } catch {
+      // V5 scoring endpoint not available — fall back to legacy sim-session submit
       try {
         const result = await apiClient.submitFlight(flightRecord);
         sendToRenderer('api:submit', { success: true, data: result });
@@ -350,62 +284,26 @@ function setupFlightTrackerListeners() {
   });
 }
 
-// ── ACARS event forwarding ────────────────────────────────────────────────────
-function setupAcarsListeners() {
-  if (!acarsClient) return;
-
-  acarsClient.on('messages', (messages) => {
-    sendToRenderer('acars:messages', messages);
-  });
-
-  acarsClient.on('pirep-alerts', (pireps) => {
-    sendToRenderer('acars:pirep-alerts', pireps);
-  });
-
-  acarsClient.on('pireps-updated', (pireps) => {
-    sendToRenderer('acars:pireps-updated', pireps);
-  });
-
-  acarsClient.on('pirep-submitted', (pirep) => {
-    sendToRenderer('acars:pirep-submitted', pirep);
-  });
-
-  acarsClient.on('error', (err) => {
-    sendToRenderer('acars:error', err);
-  });
-}
-
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 function registerIpcHandlers() {
-  // SimConnect control
-  ipcMain.on('simconnect:connect', () => attemptSimConnect());
-  ipcMain.on('simconnect:disconnect', () => {
-    if (simManager) simManager.disconnect();
-  });
+  ipcMain.on('simconnect:connect',    () => attemptSimConnect());
+  ipcMain.on('simconnect:disconnect', () => simManager?.disconnect());
 
-  // Tracking control
-  ipcMain.on('tracking:start', () => {
-    if (flightTracker) flightTracker.startTracking();
-  });
-  ipcMain.on('tracking:stop', () => {
-    if (flightTracker) flightTracker.stopTracking();
-  });
+  ipcMain.on('tracking:start', () => flightTracker?.startTracking());
+  ipcMain.on('tracking:stop',  () => flightTracker?.stopTracking());
 
-  // Settings
   ipcMain.handle('settings:load', () => ({
-    apiUrl: store.get('apiUrl'),
-    apiToken: store.get('apiToken'),
-    autoConnect: store.get('autoConnect'),
+    apiUrl:         store.get('apiUrl'),
+    apiToken:       store.get('apiToken'),
+    autoConnect:    store.get('autoConnect'),
     minimizeToTray: store.get('minimizeToTray'),
   }));
 
   ipcMain.handle('settings:save', (_, settings) => {
-    if (settings.apiUrl)   store.set('apiUrl', settings.apiUrl);
+    if (settings.apiUrl)               store.set('apiUrl',   settings.apiUrl);
     if (settings.apiToken !== undefined) store.set('apiToken', settings.apiToken);
     if (settings.autoConnect !== undefined) store.set('autoConnect', settings.autoConnect);
     if (settings.minimizeToTray !== undefined) store.set('minimizeToTray', settings.minimizeToTray);
-
-    // Update api client
     if (apiClient) {
       apiClient.setBaseUrl(store.get('apiUrl'));
       apiClient.setToken(store.get('apiToken'));
@@ -413,18 +311,6 @@ function registerIpcHandlers() {
     return true;
   });
 
-  // Token verification (GET /api/tracker-key — does not create any records)
-  ipcMain.handle('api:verifyToken', async () => {
-    if (!apiClient) return { success: false, error: 'API client not initialized' };
-    try {
-      await apiClient.verifyToken();
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  // Manual flight submit
   ipcMain.handle('api:submitFlight', async (_, flightRecord) => {
     if (!apiClient) return { success: false, error: 'API client not initialized' };
     const token = store.get('apiToken');
@@ -437,52 +323,16 @@ function registerIpcHandlers() {
     }
   });
 
-  // ── ACARS ──
-  ipcMain.handle('acars:start', async (_, flightInfo) => {
-    if (!acarsClient) return { success: false, error: 'ACARS not initialized' };
-    try {
-      await acarsClient.startFlight(flightInfo);
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('acars:stop', async () => {
-    if (acarsClient) acarsClient.stopFlight();
-    return { success: true };
-  });
-
-  ipcMain.handle('acars:submitPirep', async (_, pirep) => {
-    if (!acarsClient) return { success: false, error: 'ACARS not initialized' };
-    try {
-      const result = await acarsClient.submitPirep(pirep);
-      return { success: true, data: result };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('acars:getMessages', async () => {
-    return acarsClient ? acarsClient.getMessages() : [];
-  });
-
-  ipcMain.handle('acars:getPireps', async () => {
-    return acarsClient ? acarsClient.getPireps() : [];
-  });
-
-  // Open external links
   ipcMain.on('open:external', (_, url) => shell.openExternal(url));
 
-  // App info
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('app:getState', () => ({
-    simConnected: simManager?.isConnected() ?? false,
+    simConnected:   simManager?.isConnected()  ?? false,
     trackingActive: flightTracker?.isTracking() ?? false,
     settings: {
-      apiUrl: store.get('apiUrl'),
-      apiToken: store.get('apiToken'),
-      autoConnect: store.get('autoConnect'),
+      apiUrl:         store.get('apiUrl'),
+      apiToken:       store.get('apiToken'),
+      autoConnect:    store.get('autoConnect'),
       minimizeToTray: store.get('minimizeToTray'),
     },
   }));
@@ -501,27 +351,17 @@ function registerIpcHandlers() {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.on('ready', async () => {
-  // Lazy-load modules (they may require native modules)
   try {
     SimConnectManager = require('./simconnect');
     FlightTracker     = require('./flight-tracker');
     ApiClient         = require('./api-client');
-    ScoringCollector  = require('./scoring-collector');
 
-    const AcarsClient = require('./acars-client');
-
-    simManager        = new SimConnectManager();
-    flightTracker     = new FlightTracker();
-    apiClient         = new ApiClient(store.get('apiUrl'), store.get('apiToken'));
-    scoringCollector  = new ScoringCollector();
-    acarsClient       = new AcarsClient(apiClient);
-
-    simManager.setMaxListeners(20);
-    flightTracker.setMaxListeners(20);
+    simManager    = new SimConnectManager();
+    flightTracker = new FlightTracker();
+    apiClient     = new ApiClient(store.get('apiUrl'), store.get('apiToken'));
 
     setupSimConnectListeners();
     setupFlightTrackerListeners();
-    setupAcarsListeners();
   } catch (err) {
     console.error('Failed to load core modules:', err);
   }
@@ -529,14 +369,16 @@ app.on('ready', async () => {
   registerIpcHandlers();
   createWindow();
   createTray();
-  // Heartbeat is started in setupSimConnectListeners 'connected' handler,
-  // so it only runs while SimConnect is active and a token is configured.
+
+  // Heartbeat every 30s so the web app knows the tracker is online
+  heartbeatInterval = setInterval(() => {
+    if (apiClient && store.get('apiToken')) apiClient.sendHeartbeat();
+  }, 30_000);
+  if (apiClient && store.get('apiToken')) apiClient.sendHeartbeat();
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    // Don't quit — we live in the tray
-  }
+  // Stay alive in tray — don't quit
 });
 
 app.on('activate', () => {
@@ -545,11 +387,13 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  stopHeartbeat();
-  if (simManager) simManager.disconnect();
+  cancelIpcFlush();
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  if (simManager)    simManager.disconnect();
+  if (flightTracker) flightTracker.stop();
 });
 
-// Prevent multiple instances
+// Single-instance lock
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();

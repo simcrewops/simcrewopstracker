@@ -4,7 +4,13 @@
  * SimCrewOps API client
  *
  * Sends completed flight records to simcrewops.com via the REST API.
- * Authentication uses a Bearer token stored in app settings.
+ * Authentication: Bearer token stored in app settings.
+ *
+ * Methods:
+ *   submitFlight(record)  → POST /api/sim-sessions   (legacy V4 submit)
+ *   scoreFlight(record)   → POST /api/flights/score  (V5 scoring + debrief)
+ *   verifyToken()         → GET  /api/tracker-key
+ *   sendHeartbeat()       → POST /api/tracker/heartbeat  (silent)
  */
 
 const https = require('https');
@@ -21,9 +27,51 @@ class ApiClient {
   setToken(token) { this._token = token || ''; }
 
   /**
-   * Submit a completed flight record to /api/sim-sessions
-   * @param {Object} flightRecord
-   * @returns {Promise<Object>} The created session from the server
+   * Submit a completed flight for V5 scoring.
+   * Sends tick data along with summary for full phase-by-phase scoring.
+   * Returns a debrief object with grade, breakdown, and pay calculation.
+   *
+   * Falls back gracefully if the endpoint doesn't exist yet (404 → throws).
+   */
+  async scoreFlight(flightRecord) {
+    if (!this._token) {
+      throw new Error('No API token configured.');
+    }
+
+    // Send the full record including ticks, but strip routePoints to avoid
+    // sending large arrays that aren't needed for scoring.
+    const body = {
+      sessionDate:      flightRecord.sessionDate,
+      aircraft:         flightRecord.aircraft   ?? 'UNKN',
+      isHeavy:          flightRecord.isHeavy    ?? false,
+      engineCount:      flightRecord.engineCount ?? 2,
+      departure:        flightRecord.departure  ?? null,
+      arrival:          flightRecord.arrival    ?? null,
+      duration:         Math.max(1, flightRecord.duration  ?? 1),
+      airTime:          flightRecord.airTime    ?? null,
+      groundTime:       flightRecord.groundTime ?? null,
+      landingRate:      flightRecord.landingRate ?? null,
+      touchdownZoneHit: flightRecord.touchdownZoneHit ?? null,
+      bounceCount:      flightRecord.bounceCount     ?? 0,
+      touchdownGForce:  flightRecord.touchdownGForce ?? null,
+      touchdownBank:    flightRecord.touchdownBank   ?? null,
+      touchdownPitch:   flightRecord.touchdownPitch  ?? null,
+      maxAltitude:      flightRecord.maxAltitude ?? null,
+      maxGForce:        flightRecord.maxGForce   ?? null,
+      fuelUsed:         flightRecord.fuelUsed    ?? null,
+      cruiseAlt:        flightRecord.cruiseAlt   ?? null,
+      ticks:            flightRecord.ticks       ?? [],
+      landingTicks:     flightRecord.landingTicks ?? [],
+      simVersion:       flightRecord.simVersion  ?? 'MSFS 2024',
+      source:           'simconnect',
+    };
+
+    return this._request('POST', '/api/flights/score', body);
+  }
+
+  /**
+   * Legacy submit — posts to /api/sim-sessions (V4 format).
+   * Used as fallback when /api/flights/score is not available.
    */
   async submitFlight(flightRecord) {
     if (!this._token) {
@@ -41,10 +89,10 @@ class ApiClient {
       departure:        flightRecord.departure         ?? null,
       arrival:          flightRecord.arrival           ?? null,
       duration:         Math.max(1, flightRecord.duration ?? 1),
-      airTime:          flightRecord.airTime           ?? null,  // hours wheels-up to wheels-down
-      groundTime:       flightRecord.groundTime        ?? null,  // hours on ground (block minus air)
+      airTime:          flightRecord.airTime           ?? null,
+      groundTime:       flightRecord.groundTime        ?? null,
       landingRate:      flightRecord.landingRate       ?? null,
-      touchdownZoneHit: flightRecord.touchdownZoneHit ?? null,  // bool: landed in first 1000-1500ft
+      touchdownZoneHit: flightRecord.touchdownZoneHit ?? null,
       maxAltitude:      flightRecord.maxAltitude       ?? null,
       maxGForce:        flightRecord.maxGForce         ?? null,
       simVersion:       flightRecord.simVersion        ?? 'MSFS 2024',
@@ -58,10 +106,6 @@ class ApiClient {
     return response.data;
   }
 
-  /**
-   * Verify the current API token is valid
-   * @returns {Promise<boolean>}
-   */
   async verifyToken() {
     try {
       await this._request('GET', '/api/tracker-key');
@@ -71,11 +115,7 @@ class ApiClient {
     }
   }
 
-  /**
-   * Send a heartbeat so the web app knows the tracker is running.
-   * Called periodically (every ~30 s) by main.js.
-   * Silently ignores errors — heartbeat failure must not disrupt tracking.
-   */
+  /** Silently ignored on failure — heartbeat must never disrupt tracking. */
   async sendHeartbeat() {
     if (!this._token) return;
     try {
@@ -85,15 +125,11 @@ class ApiClient {
     }
   }
 
-  /**
-   * Internal HTTP request helper (uses native https/http modules, no axios)
-   */
-  _request(method, path, body) {
+  _request(method, urlPath, body) {
     return new Promise((resolve, reject) => {
-      const url = new URL(this._baseUrl + path);
+      const url     = new URL(this._baseUrl + urlPath);
       const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
-
+      const lib     = isHttps ? https : http;
       const bodyStr = body ? JSON.stringify(body) : null;
 
       const options = {
@@ -108,10 +144,7 @@ class ApiClient {
           'User-Agent':    'SimCrewOps-Tracker/1.0',
         },
       };
-
-      if (bodyStr) {
-        options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
-      }
+      if (bodyStr) options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
 
       const req = lib.request(options, (res) => {
         let data = '';
@@ -122,9 +155,7 @@ class ApiClient {
             if (res.statusCode >= 200 && res.statusCode < 300) {
               resolve(parsed);
             } else {
-              reject(new Error(
-                parsed.error ?? `HTTP ${res.statusCode}: ${res.statusMessage}`
-              ));
+              reject(new Error(parsed.error ?? `HTTP ${res.statusCode}: ${res.statusMessage}`));
             }
           } catch {
             reject(new Error(`Invalid JSON response (HTTP ${res.statusCode})`));
@@ -132,10 +163,7 @@ class ApiClient {
         });
       });
 
-      req.on('error', (err) => {
-        reject(new Error(`Network error: ${err.message}`));
-      });
-
+      req.on('error', (err) => reject(new Error(`Network error: ${err.message}`)));
       req.setTimeout(15000, () => {
         req.destroy();
         reject(new Error('Request timed out after 15 seconds'));

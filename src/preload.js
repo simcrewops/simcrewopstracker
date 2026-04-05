@@ -2,7 +2,6 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose a safe, typed API to the renderer process
 contextBridge.exposeInMainWorld('tracker', {
   // ── SimConnect ──
   connect:    () => ipcRenderer.send('simconnect:connect'),
@@ -13,28 +12,20 @@ contextBridge.exposeInMainWorld('tracker', {
   stopTracking:  () => ipcRenderer.send('tracking:stop'),
 
   // ── Settings ──
-  loadSettings: ()           => ipcRenderer.invoke('settings:load'),
-  saveSettings: (settings)   => ipcRenderer.invoke('settings:save', settings),
+  loadSettings: ()         => ipcRenderer.invoke('settings:load'),
+  saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
 
   // ── API ──
-  submitFlight: (record)     => ipcRenderer.invoke('api:submitFlight', record),
-  verifyToken:  ()           => ipcRenderer.invoke('api:verifyToken'),
-
-  // ── ACARS ──
-  acarsStart:      (flightInfo) => ipcRenderer.invoke('acars:start', flightInfo),
-  acarsStop:       ()           => ipcRenderer.invoke('acars:stop'),
-  acarsSubmitPirep:(pirep)      => ipcRenderer.invoke('acars:submitPirep', pirep),
-  acarsGetMessages:()           => ipcRenderer.invoke('acars:getMessages'),
-  acarsGetPireps:  ()           => ipcRenderer.invoke('acars:getPireps'),
+  submitFlight: (record)   => ipcRenderer.invoke('api:submitFlight', record),
 
   // ── Window controls ──
-  minimizeWindow: ()  => ipcRenderer.send('window:minimize'),
-  maximizeWindow: ()  => ipcRenderer.send('window:maximize'),
-  closeWindow:    ()  => ipcRenderer.send('window:close'),
+  minimizeWindow: () => ipcRenderer.send('window:minimize'),
+  maximizeWindow: () => ipcRenderer.send('window:maximize'),
+  closeWindow:    () => ipcRenderer.send('window:close'),
 
   // ── App info ──
-  getVersion:  ()     => ipcRenderer.invoke('app:version'),
-  getState:    ()     => ipcRenderer.invoke('app:getState'),
+  getVersion: () => ipcRenderer.invoke('app:version'),
+  getState:   () => ipcRenderer.invoke('app:getState'),
 
   // ── Utilities ──
   openExternal: (url) => ipcRenderer.send('open:external', url),
@@ -43,20 +34,18 @@ contextBridge.exposeInMainWorld('tracker', {
   on: (channel, callback) => {
     const allowed = [
       'simconnect:status',
-      'flight:data',
+      'flight:data',      // 1Hz batched (≤5/s) flight data
+      'flight:hf',        // 100ms high-freq landing data (approach/landing only)
       'flight:phase',
       'flight:event',
       'flight:complete',
+      'flight:debrief',   // V5 scoring debrief after flight complete
       'api:submit',
-      'acars:messages',
-      'acars:pirep-alerts',
-      'acars:pireps-updated',
-      'acars:pirep-submitted',
-      'acars:error',
     ];
     if (allowed.includes(channel)) {
       const listener = (_, ...args) => callback(...args);
       ipcRenderer.on(channel, listener);
+      // Return unsubscribe function
       return () => ipcRenderer.removeListener(channel, listener);
     }
     return () => {};

@@ -13,10 +13,11 @@
 <body>
 <div id="app">
 
-  <!-- ── Custom Titlebar ─────────────────────────────────────────────────── -->
+  <!-- ── Title Bar ──────────────────────────────────────────────────────────── -->
   <div id="titlebar">
     <div id="titlebar-left">
-      <span id="titlebar-logo-text">SimCrewOps</span>
+      <div class="logo-icon">S</div>
+      <span id="titlebar-logo-text">Sim<span class="logo-accent">Crew</span>Ops</span>
     </div>
     <div id="titlebar-right">
       <div id="conn-status">
@@ -33,282 +34,220 @@
     </div>
   </div>
 
-  <!-- ── Airline / Flight Header ────────────────────────────────────────── -->
-  <div id="airline-header">
-    <div class="airline-logo" id="airline-logo">✈</div>
-    <div class="airline-name" id="airline-name">SimCrewOps Network</div>
-    <div class="live-badge">LIVE</div>
-    <div class="flight-info-pill">
-      <span id="dep-icao">—</span>
-      <span class="arr-arrow">→</span>
-      <span id="arr-icao">—</span>
-      <span class="flight-timer-small" id="flight-timer">00:00:00</span>
-    </div>
-  </div>
-
-  <!-- ── Leaflet Map ─────────────────────────────────────────────────────── -->
-  <div id="map-wrapper">
-    <div id="map"></div>
-    <div class="map-legend">
-      <div class="legend-item"><div class="legend-dot you"></div><span id="legend-you-label">You</span></div>
-      <div class="legend-item"><div class="legend-dot route"></div><span>Route track</span></div>
-    </div>
-  </div>
-
-  <!-- ── Main Content ────────────────────────────────────────────────────── -->
+  <!-- ── Scrollable Content ─────────────────────────────────────────────────── -->
   <div id="content">
 
-    <!-- Phase Scoring -->
-    <div class="phase-card">
-      <div class="phase-header">
-        <div class="phase-title">Flight Phase Scoring</div>
-        <div class="phase-overall">Overall: <span id="overall-score" class="score-val">—</span></div>
+    <!-- ── Flight Card ────────────────────────────────────────────────────── -->
+    <div class="card" id="flight-card">
+      <div class="flight-header">
+        <div class="flight-id-row">
+          <div class="airline-badge" id="airline-badge">—</div>
+          <div class="flight-num" id="flight-num">—</div>
+        </div>
+        <div class="flight-tags">
+          <div class="aircraft-tag" id="aircraft-tag">—</div>
+          <div class="grade-badge" id="grade-badge" style="display:none">—</div>
+        </div>
       </div>
-      <div class="phases">
+
+      <!-- Route display -->
+      <div class="route-display">
+        <div class="airport-block">
+          <div class="airport-code" id="dep-icao">—</div>
+          <div class="airport-sub">Departure</div>
+        </div>
+        <div class="route-line-wrap">
+          <div class="route-line-bg"></div>
+          <div class="route-line-fill" id="route-fill" style="width:0%"></div>
+          <div class="route-plane" id="route-plane">✈</div>
+        </div>
+        <div class="airport-block right">
+          <div class="airport-code" id="arr-icao">—</div>
+          <div class="airport-sub">Arrival</div>
+        </div>
+      </div>
+
+      <!-- Phase badge + timer row -->
+      <div class="flight-meta-row">
+        <div class="phase-badge" id="phase-badge">Idle</div>
+        <div class="flight-timer" id="flight-timer">—</div>
+      </div>
+    </div>
+
+    <!-- ── Phase Progress ─────────────────────────────────────────────────── -->
+    <div class="card" id="phase-card">
+      <div class="card-label">FLIGHT PHASE</div>
+      <div class="phases" id="phase-track">
         <div class="phase" id="ph-preflight">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Pre-Flt</div>
         </div>
         <div class="phase" id="ph-taxi_out">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Taxi Out</div>
         </div>
-        <div class="phase" id="ph-takeoff">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+        <div class="phase" id="ph-takeoff_roll">
+          <div class="phase-dot"></div>
           <div class="phase-name">Takeoff</div>
         </div>
         <div class="phase" id="ph-climb">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Climb</div>
         </div>
         <div class="phase" id="ph-cruise">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Cruise</div>
         </div>
         <div class="phase" id="ph-descent">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Descent</div>
         </div>
         <div class="phase" id="ph-approach">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Appr</div>
         </div>
         <div class="phase" id="ph-landing">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Land</div>
         </div>
         <div class="phase" id="ph-taxi_in">
-          <div class="phase-bar"></div>
-          <div class="phase-score">—</div>
+          <div class="phase-dot"></div>
           <div class="phase-name">Taxi In</div>
         </div>
-      </div>
-    </div>
-
-    <!-- Tab Bar -->
-    <div class="tab-bar">
-      <div class="tab active" data-tab="myflight">✈ My Flight</div>
-      <div class="tab" data-tab="flights">🌐 Flights</div>
-      <div class="tab" data-tab="pireps">⚠ PIREPs</div>
-      <div class="tab" data-tab="acars">✉ ACARS</div>
-    </div>
-
-    <!-- ── My Flight Tab ───────────────────────────────────────────────── -->
-    <div class="tab-panel active" id="tab-myflight">
-
-      <!-- Tracking row -->
-      <div class="tracking-row">
-        <div id="tracking-status-pill">
-          <span class="tpill-dot"></span>
-          <span id="tracking-label">Not Tracking</span>
-        </div>
-        <button class="btn-ghost" id="btn-toggle-tracking" disabled>
-          &#9654; Start Tracking
-        </button>
-      </div>
-
-      <!-- Metrics grid -->
-      <div id="metrics-grid">
-        <div class="metric-card metric-blue">
-          <div class="metric-label">Altitude</div>
-          <div class="metric-value" id="m-altitude"><span id="mv-altitude">—</span><span class="metric-unit">ft</span></div>
-          <div class="metric-sub">MSL</div>
-        </div>
-        <div class="metric-card metric-green">
-          <div class="metric-label">Airspeed</div>
-          <div class="metric-value" id="m-ias"><span id="mv-ias">—</span><span class="metric-unit">kt</span></div>
-          <div class="metric-sub">IAS</div>
-        </div>
-        <div class="metric-card metric-amber">
-          <div class="metric-label">Vert Speed</div>
-          <div class="metric-value" id="m-vs"><span id="mv-vs">—</span><span class="metric-unit">fpm</span></div>
-          <div class="metric-sub">Vertical</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Heading</div>
-          <div class="metric-value" id="m-hdg"><span id="mv-hdg">—</span><span class="metric-unit">°</span></div>
-          <div class="metric-sub">True</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Ground Spd</div>
-          <div class="metric-value" id="m-gs"><span id="mv-gs">—</span><span class="metric-unit">kt</span></div>
-          <div class="metric-sub">GS</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Fuel</div>
-          <div class="metric-value" id="m-fuel"><span id="mv-fuel">—</span><span class="metric-unit">gal</span></div>
-          <div class="metric-sub">Total</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">G-Force</div>
-          <div class="metric-value" id="m-gforce"><span id="mv-gforce">—</span><span class="metric-unit">G</span></div>
-          <div class="metric-sub">Current</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Systems</div>
-          <div class="metric-value" id="m-systems" style="font-size:11px; margin-top:2px;">—</div>
-          <div class="metric-sub">Gear / Flaps / AP</div>
-        </div>
-      </div>
-
-      <!-- Event log -->
-      <div class="v4-card">
-        <div class="v4-card-header">
-          <div class="v4-card-title">Flight Events</div>
-        </div>
-        <div id="event-log">
-          <div class="event-placeholder">No events yet — connect to MSFS to begin</div>
-        </div>
-      </div>
-
-    </div><!-- /tab-myflight -->
-
-    <!-- ── Flights Tab ────────────────────────────────────────────────── -->
-    <div class="tab-panel" id="tab-flights">
-      <div class="flight-board">
-        <div class="board-header">
-          <div class="board-title">Live Flight Board</div>
-          <div class="board-count" id="board-count">— Active Flights</div>
-        </div>
-        <div id="flight-board-body">
-          <div class="board-empty">Connect to SimCrewOps to see live network flights</div>
+        <div class="phase" id="ph-post_flight">
+          <div class="phase-dot"></div>
+          <div class="phase-name">Arrived</div>
         </div>
       </div>
     </div>
 
-    <!-- ── PIREPs Tab ─────────────────────────────────────────────────── -->
-    <div class="tab-panel" id="tab-pireps">
-      <div class="pirep-panel">
-        <div class="pirep-header">
-          <div class="pirep-title">Pilot Weather Reports</div>
-          <div class="pirep-badge" id="pirep-count-badge">Network</div>
+    <!-- ── Live Instruments ───────────────────────────────────────────────── -->
+    <div class="card" id="data-card">
+      <div class="data-grid">
+        <div class="data-item">
+          <div class="data-value" id="d-alt">—</div>
+          <div class="data-unit">ALT (ft)</div>
         </div>
-        <div class="pirep-list" id="pirep-list">
-          <div class="board-empty" id="pirep-empty">No PIREPs available — connect to view reports</div>
+        <div class="data-item">
+          <div class="data-value" id="d-gs">—</div>
+          <div class="data-unit">GS (kts)</div>
         </div>
-        <div class="pirep-submit" id="btn-pirep-submit">
-          <span class="pirep-submit-icon">+</span>
-          <span>Submit a PIREP</span>
+        <div class="data-item">
+          <div class="data-value" id="d-hdg">—</div>
+          <div class="data-unit">Heading</div>
+        </div>
+        <div class="data-item">
+          <div class="data-value" id="d-vs">—</div>
+          <div class="data-unit">VS (fpm)</div>
+        </div>
+        <div class="data-item">
+          <div class="data-value" id="d-ias">—</div>
+          <div class="data-unit">IAS (kts)</div>
+        </div>
+        <div class="data-item">
+          <div class="data-value" id="d-fuel">—</div>
+          <div class="data-unit">Fuel (gal)</div>
         </div>
       </div>
-
-      <!-- PIREP Submit Form (hidden by default) -->
-      <div id="pirep-form-overlay" style="display:none">
-        <div class="pirep-form">
-          <div class="pirep-form-header">
-            <h3>Submit Pilot Report</h3>
-            <button class="btn-ghost" id="btn-pirep-form-close">&#x2715;</button>
-          </div>
-          <div class="pirep-form-body">
-            <div class="form-group">
-              <label>Report Type</label>
-              <select class="form-input" id="pirep-type">
-                <option value="TURBULENCE">Turbulence</option>
-                <option value="ICING">Icing</option>
-                <option value="VISIBILITY">Visibility</option>
-                <option value="WINDS">Winds</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Severity</label>
-              <select class="form-input" id="pirep-severity">
-                <option value="LIGHT">Light</option>
-                <option value="MODERATE">Moderate</option>
-                <option value="SEVERE">Severe</option>
-                <option value="EXTREME">Extreme</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Details (optional)</label>
-              <input class="form-input" type="text" id="pirep-message"
-                     placeholder="e.g., Continuous moderate chop FL350-FL370" maxlength="500" />
-            </div>
-            <div class="pirep-form-position" id="pirep-form-position">
-              Position: — &nbsp; Alt: —
-            </div>
-          </div>
-          <div class="pirep-form-footer">
-            <button class="btn-ghost" id="btn-pirep-cancel">Cancel</button>
-            <button class="btn-primary-v4" id="btn-pirep-send">Submit PIREP</button>
-          </div>
-        </div>
+      <!-- Systems strip -->
+      <div class="sys-strip" id="sys-strip">
+        <span class="sys-item" id="sys-gear">⚙ —</span>
+        <span class="sys-sep">·</span>
+        <span class="sys-item" id="sys-flaps">Flaps —</span>
+        <span class="sys-sep">·</span>
+        <span class="sys-item" id="sys-ap">AP Off</span>
+        <span class="sys-sep">·</span>
+        <span class="sys-item" id="sys-lights">Lights —</span>
       </div>
     </div>
 
-    <!-- ── ACARS Tab ──────────────────────────────────────────────────── -->
-    <div class="tab-panel" id="tab-acars">
-      <div class="acars-panel">
-        <div class="acars-header">
-          <div class="acars-title">ACARS Messages</div>
-          <div class="acars-unread" id="acars-unread" style="display:none">0</div>
+    <!-- ── Flight Progress ────────────────────────────────────────────────── -->
+    <div class="card" id="progress-card" style="display:none">
+      <div class="progress-header">
+        <div class="card-label">FLIGHT PROGRESS</div>
+        <div class="progress-pct" id="progress-pct">0%</div>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-times">
+        <span>Dep <span id="dep-time" class="time-val">—</span></span>
+        <span><span id="nm-remaining" class="time-val">—</span> nm remaining</span>
+        <span>ETA <span id="eta-time" class="time-val">—</span></span>
+      </div>
+    </div>
+
+    <!-- ── Event Log ─────────────────────────────────────────────────────── -->
+    <div class="card" id="events-card">
+      <div class="card-label">FLIGHT EVENTS</div>
+      <div id="event-log">
+        <div class="event-placeholder">Connect to MSFS to begin</div>
+      </div>
+    </div>
+
+    <!-- ── Post-Flight Debrief (hidden until flight complete) ─────────────── -->
+    <div class="card debrief-card" id="debrief-card" style="display:none">
+      <div class="debrief-header">
+        <div class="debrief-grade-wrap">
+          <div class="debrief-grade" id="db-grade">—</div>
+          <div class="debrief-grade-label">Final Grade</div>
         </div>
-        <div class="acars-messages" id="acars-messages">
-          <div class="board-empty" id="acars-empty">No messages — start a flight to receive ACARS</div>
+        <div class="debrief-title-wrap">
+          <div class="debrief-route" id="db-route">— → —</div>
+          <div class="debrief-sub" id="db-sub">—</div>
         </div>
+      </div>
+      <div class="debrief-metrics">
+        <div class="db-metric">
+          <div class="db-metric-value" id="db-lr">—</div>
+          <div class="db-metric-label">Landing Rate</div>
+        </div>
+        <div class="db-metric">
+          <div class="db-metric-value" id="db-gforce">—</div>
+          <div class="db-metric-label">G-Force</div>
+        </div>
+        <div class="db-metric">
+          <div class="db-metric-value" id="db-zone">—</div>
+          <div class="db-metric-label">TDZ</div>
+        </div>
+        <div class="db-metric">
+          <div class="db-metric-value" id="db-bounce">—</div>
+          <div class="db-metric-label">Bounces</div>
+        </div>
+      </div>
+      <div class="debrief-actions">
+        <button class="btn-primary" id="btn-submit-flight">Submit to SimCrewOps</button>
+        <button class="btn-ghost" id="btn-dismiss-debrief">Dismiss</button>
       </div>
     </div>
 
   </div><!-- /content -->
 
-  <!-- ── Flight Complete Banner ──────────────────────────────────────────── -->
-  <div id="flight-complete-banner">
-    <div class="banner-icon">🛬</div>
-    <div class="banner-body">
-      <div class="banner-title" id="banner-title">Flight Complete</div>
-      <div class="banner-detail" id="banner-detail">—</div>
-      <div class="banner-actions">
-        <button class="btn-primary-v4" id="btn-submit-flight">
-          &#9658; Submit to SimCrewOps
-        </button>
-        <button class="btn-ghost" id="btn-dismiss-banner">Dismiss</button>
-      </div>
+  <!-- ── Map (collapsed by default, toggled via button) ─────────────────────── -->
+  <div id="map-wrapper" style="display:none">
+    <div id="map"></div>
+    <div class="map-legend">
+      <div class="legend-item"><div class="legend-dot you"></div><span>You</span></div>
+      <div class="legend-item"><div class="legend-dot route"></div><span>Route</span></div>
     </div>
   </div>
 
-  <!-- ── Status Bar ──────────────────────────────────────────────────────── -->
+  <!-- ── Status Bar ──────────────────────────────────────────────────────────── -->
   <div id="status-bar">
-    <div class="sync-status">
+    <div class="status-left">
       <div class="spinner" id="sync-spinner" style="display:none"></div>
       <span id="status-text">Not connected to MSFS</span>
     </div>
     <div class="status-right">
-      <span id="map-coords" style="font-size:9px; color:rgba(255,255,255,0.25);">—</span>
-      <span id="last-update" style="font-size:9px; color:rgba(255,255,255,0.2);"></span>
+      <button class="map-toggle-btn" id="btn-map-toggle" title="Toggle map">⊞ Map</button>
+      <span id="map-coords" class="coords-text">—</span>
       <span class="version-tag" id="version-tag">v1.0.0</span>
     </div>
   </div>
 
 </div><!-- /app -->
 
-<!-- ── Settings Overlay ──────────────────────────────────────────────────── -->
+<!-- ── Settings Overlay ────────────────────────────────────────────────────── -->
 <div id="settings-overlay">
   <div id="settings-panel">
     <div id="settings-header">
@@ -341,7 +280,7 @@
             <span class="toggle-track"></span>
           </label>
         </div>
-        <div class="form-toggle" style="margin-top:8px;">
+        <div class="form-toggle" style="margin-top:8px">
           <span>Minimize to system tray on close</span>
           <label class="toggle-switch">
             <input type="checkbox" id="chk-tray" />
@@ -356,7 +295,7 @@
     <div class="settings-footer">
       <button class="btn-ghost" id="btn-verify-token">Verify Key</button>
       <button class="btn-ghost" id="btn-settings-cancel">Cancel</button>
-      <button class="btn-primary-v4" id="btn-settings-save">Save Settings</button>
+      <button class="btn-primary" id="btn-settings-save">Save Settings</button>
     </div>
   </div>
 </div>
