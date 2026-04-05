@@ -438,6 +438,225 @@ async function submitFlight() {
   }
 }
 
+// ── ACARS Messages UI ─────────────────────────────────────────────────────
+let acarsUnreadCount = 0;
+
+const ACARS_TYPE_ICONS = {
+  GATE_DISPATCH: '🚪',
+  WEATHER:       '🌤',
+  COMPANY:       '📋',
+  PIREP_ALERT:   '⚠️',
+};
+
+const ACARS_TYPE_COLORS = {
+  GATE_DISPATCH: '#3b82f6',
+  WEATHER:       '#f59e0b',
+  COMPANY:       '#8b5cf6',
+  PIREP_ALERT:   '#ef4444',
+};
+
+function renderAcarsMessage(msg) {
+  const container = $('acars-messages');
+  const empty = $('acars-empty');
+  if (empty) empty.remove();
+
+  const content = msg.content || {};
+  const icon = ACARS_TYPE_ICONS[msg.type] || '✉';
+  const color = ACARS_TYPE_COLORS[msg.type] || '#64748b';
+  const header = content.header || msg.type;
+  const body = content.message || content.metar || JSON.stringify(content);
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const el = document.createElement('div');
+  el.className = 'acars-msg';
+  el.innerHTML = `
+    <div class="acars-msg-header">
+      <span class="acars-msg-icon" style="color:${color}">${icon}</span>
+      <span class="acars-msg-type" style="color:${color}">${header}</span>
+      <span class="acars-msg-time">${time}</span>
+    </div>
+    <div class="acars-msg-body">${escapeHtml(body)}</div>
+    ${content.remarks ? `<div class="acars-msg-remarks">${content.remarks.map(r => escapeHtml(r)).join(' · ')}</div>` : ''}
+  `;
+  container.insertBefore(el, container.firstChild);
+
+  // Update unread badge if not on ACARS tab
+  const acarsTab = document.querySelector('.tab[data-tab="acars"]');
+  if (!acarsTab?.classList.contains('active')) {
+    acarsUnreadCount++;
+    const badge = $('acars-unread');
+    badge.textContent = String(acarsUnreadCount);
+    badge.style.display = 'inline-flex';
+  }
+
+  // Play notification sound
+  playAcarsChime();
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function playAcarsChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.08);
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.16);
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {
+    // Audio not available
+  }
+}
+
+// ── PIREP UI ──────────────────────────────────────────────────────────────
+function renderPirep(pirep) {
+  const list = $('pirep-list');
+  const empty = $('pirep-empty');
+  if (empty) empty.remove();
+
+  const severityColors = {
+    LIGHT:    '#6ee7b7',
+    MODERATE: '#fcd34d',
+    SEVERE:   '#f97316',
+    EXTREME:  '#ef4444',
+  };
+
+  const typeIcons = {
+    TURBULENCE: '💨',
+    ICING:      '🧊',
+    VISIBILITY: '🌫',
+    WINDS:      '🌬',
+  };
+
+  const color = severityColors[pirep.severity] || '#64748b';
+  const icon = typeIcons[pirep.type] || '⚠️';
+  const dist = pirep.distanceNm != null ? `${pirep.distanceNm}nm` : '';
+  const alt = pirep.altitude ? `FL${Math.round(pirep.altitude / 100)}` : '';
+  const age = pirep.createdAt ? timeSince(new Date(pirep.createdAt)) : '';
+  const pilot = pirep.pilotName || (pirep.isOwn ? 'You' : 'Pilot');
+
+  const el = document.createElement('div');
+  el.className = 'pirep-item';
+  el.innerHTML = `
+    <div class="pirep-item-header">
+      <span class="pirep-item-icon">${icon}</span>
+      <span class="pirep-item-type" style="color:${color}">${pirep.type} — ${pirep.severity}</span>
+      <span class="pirep-item-dist">${dist} ${alt}</span>
+    </div>
+    <div class="pirep-item-body">${pirep.message ? escapeHtml(pirep.message) : 'No details provided'}</div>
+    <div class="pirep-item-meta">${pilot} · ${age}</div>
+  `;
+  list.insertBefore(el, list.firstChild);
+}
+
+function renderPirepAlert(pirep) {
+  const severityLabels = { LIGHT: 'Light', MODERATE: 'Moderate', SEVERE: 'SEVERE', EXTREME: 'EXTREME' };
+  const sev = severityLabels[pirep.severity] || pirep.severity;
+  addEvent('info', `PIREP: ${sev} ${pirep.type.toLowerCase()} reported ${pirep.distanceNm}nm away at FL${Math.round(pirep.altitude / 100)}`);
+
+  // Also play a distinct alert sound for severe+ PIREPs
+  if (pirep.severity === 'SEVERE' || pirep.severity === 'EXTREME') {
+    playPirepAlert();
+  }
+}
+
+function playPirepAlert() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(600, ctx.currentTime);
+    osc.frequency.setValueAtTime(800, ctx.currentTime + 0.15);
+    osc.frequency.setValueAtTime(600, ctx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.5);
+  } catch {
+    // Audio not available
+  }
+}
+
+function timeSince(date) {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60)   return 'just now';
+  if (seconds < 3600)  return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function updatePirepList(pireps) {
+  const list = $('pirep-list');
+  list.innerHTML = '';
+  if (pireps.length === 0) {
+    list.innerHTML = '<div class="board-empty" id="pirep-empty">No PIREPs nearby</div>';
+    return;
+  }
+  pireps.forEach(p => renderPirep(p));
+  const badge = $('pirep-count-badge');
+  if (badge) badge.textContent = `${pireps.length} nearby`;
+}
+
+function openPirepForm() {
+  const overlay = $('pirep-form-overlay');
+  overlay.style.display = 'flex';
+  // Show current position
+  if (state.lastData) {
+    const d = state.lastData;
+    $('pirep-form-position').textContent =
+      `Position: ${d.lat.toFixed(2)}°${d.lat >= 0 ? 'N' : 'S'} ${Math.abs(d.lon).toFixed(2)}°${d.lon >= 0 ? 'E' : 'W'} · Alt: ${d.altitude.toLocaleString()} ft`;
+  }
+}
+
+function closePirepForm() {
+  $('pirep-form-overlay').style.display = 'none';
+  $('pirep-type').value = 'TURBULENCE';
+  $('pirep-severity').value = 'LIGHT';
+  $('pirep-message').value = '';
+}
+
+async function sendPirep() {
+  if (!window.tracker) return;
+  const btn = $('btn-pirep-send');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+
+  const pirep = {
+    type:     $('pirep-type').value,
+    severity: $('pirep-severity').value,
+    message:  $('pirep-message').value.trim(),
+  };
+
+  try {
+    const result = await window.tracker.acarsSubmitPirep(pirep);
+    if (result.success) {
+      addEvent('info', `PIREP submitted: ${pirep.severity} ${pirep.type.toLowerCase()}`);
+      closePirepForm();
+    } else {
+      addEvent('error', `PIREP failed: ${result.error}`);
+    }
+  } catch (err) {
+    addEvent('error', `PIREP failed: ${err.message || 'Unknown error'}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Submit PIREP';
+  }
+}
+
 // ── Tab switching ──────────────────────────────────────────────────────────
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -450,6 +669,14 @@ function switchTab(name) {
   // Invalidate map size when the map tab becomes visible
   if (name === 'myflight' && leafletMap) {
     setTimeout(() => leafletMap.invalidateSize(), 50);
+  }
+
+  // Clear ACARS unread badge when switching to ACARS tab
+  if (name === 'acars') {
+    acarsUnreadCount = 0;
+    const badge = $('acars-unread');
+    badge.style.display = 'none';
+    badge.textContent = '0';
   }
 }
 
@@ -530,6 +757,31 @@ window.tracker.on('api:submit', ({ success, error }) => {
   }
 });
 
+// ── ACARS events ──────────────────────────────────────────────────────
+window.tracker.on('acars:messages', (messages) => {
+  if (!Array.isArray(messages)) return;
+  messages.forEach(msg => renderAcarsMessage(msg));
+});
+
+window.tracker.on('acars:pirep-alerts', (pireps) => {
+  if (!Array.isArray(pireps)) return;
+  pireps.forEach(p => renderPirepAlert(p));
+});
+
+window.tracker.on('acars:pireps-updated', (pireps) => {
+  if (!Array.isArray(pireps)) return;
+  updatePirepList(pireps);
+});
+
+window.tracker.on('acars:pirep-submitted', (pirep) => {
+  addEvent('info', 'Your PIREP has been broadcast to nearby pilots');
+});
+
+window.tracker.on('acars:error', (err) => {
+  // Silent for non-critical ACARS errors
+  console.warn('[ACARS]', err.action, err.error);
+});
+
 } // end if (window.tracker)
 
 // ── Button handlers ────────────────────────────────────────────────────────
@@ -577,6 +829,15 @@ $('link-api-key').addEventListener('click', (e) => {
 
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) closeSettings();
+});
+
+// ── PIREP form handlers ───────────────────────────────────────────────
+$('btn-pirep-submit').addEventListener('click', openPirepForm);
+$('btn-pirep-form-close').addEventListener('click', closePirepForm);
+$('btn-pirep-cancel').addEventListener('click', closePirepForm);
+$('btn-pirep-send').addEventListener('click', sendPirep);
+$('pirep-form-overlay').addEventListener('click', (e) => {
+  if (e.target.id === 'pirep-form-overlay') closePirepForm();
 });
 
 document.querySelectorAll('.tab').forEach(tab => {

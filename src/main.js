@@ -29,6 +29,7 @@ let tray = null;
 let simManager = null;
 let flightTracker = null;
 let apiClient = null;
+let acarsClient = null;
 let isQuitting = false;
 let heartbeatInterval = null;
 
@@ -197,6 +198,15 @@ function setupSimConnectListeners() {
   simManager.on('data', (flightData) => {
     flightTracker.update(flightData);
     sendToRenderer('flight:data', flightData);
+
+    // Keep ACARS client updated with position for PIREP proximity
+    if (acarsClient && flightData) {
+      acarsClient.updatePosition({
+        lat: flightData.lat,
+        lon: flightData.lon,
+        altitude: flightData.altitude,
+      });
+    }
   });
 }
 
@@ -205,6 +215,11 @@ function setupFlightTrackerListeners() {
     sendToRenderer('flight:phase', phase);
     if (phase.phase === 'tracking' || phase.phase === 'cruise') {
       updateTrayMenu('tracking');
+    }
+
+    // Trigger ACARS message fetch on phase transitions
+    if (acarsClient) {
+      acarsClient.onPhaseChange(phase.phase);
     }
   });
 
@@ -230,6 +245,31 @@ function setupFlightTrackerListeners() {
         sendToRenderer('api:submit', { success: false, error: err.message });
       }
     }
+  });
+}
+
+// ── ACARS event forwarding ────────────────────────────────────────────────────
+function setupAcarsListeners() {
+  if (!acarsClient) return;
+
+  acarsClient.on('messages', (messages) => {
+    sendToRenderer('acars:messages', messages);
+  });
+
+  acarsClient.on('pirep-alerts', (pireps) => {
+    sendToRenderer('acars:pirep-alerts', pireps);
+  });
+
+  acarsClient.on('pireps-updated', (pireps) => {
+    sendToRenderer('acars:pireps-updated', pireps);
+  });
+
+  acarsClient.on('pirep-submitted', (pirep) => {
+    sendToRenderer('acars:pirep-submitted', pirep);
+  });
+
+  acarsClient.on('error', (err) => {
+    sendToRenderer('acars:error', err);
   });
 }
 
@@ -284,6 +324,40 @@ function registerIpcHandlers() {
     }
   });
 
+  // ── ACARS ──
+  ipcMain.handle('acars:start', async (_, flightInfo) => {
+    if (!acarsClient) return { success: false, error: 'ACARS not initialized' };
+    try {
+      await acarsClient.startFlight(flightInfo);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('acars:stop', async () => {
+    if (acarsClient) acarsClient.stopFlight();
+    return { success: true };
+  });
+
+  ipcMain.handle('acars:submitPirep', async (_, pirep) => {
+    if (!acarsClient) return { success: false, error: 'ACARS not initialized' };
+    try {
+      const result = await acarsClient.submitPirep(pirep);
+      return { success: true, data: result };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('acars:getMessages', async () => {
+    return acarsClient ? acarsClient.getMessages() : [];
+  });
+
+  ipcMain.handle('acars:getPireps', async () => {
+    return acarsClient ? acarsClient.getPireps() : [];
+  });
+
   // Open external links
   ipcMain.on('open:external', (_, url) => shell.openExternal(url));
 
@@ -320,12 +394,16 @@ app.on('ready', async () => {
     FlightTracker     = require('./flight-tracker');
     ApiClient         = require('./api-client');
 
+    const AcarsClient = require('./acars-client');
+
     simManager    = new SimConnectManager();
     flightTracker = new FlightTracker();
     apiClient     = new ApiClient(store.get('apiUrl'), store.get('apiToken'));
+    acarsClient   = new AcarsClient(apiClient);
 
     setupSimConnectListeners();
     setupFlightTrackerListeners();
+    setupAcarsListeners();
   } catch (err) {
     console.error('Failed to load core modules:', err);
   }

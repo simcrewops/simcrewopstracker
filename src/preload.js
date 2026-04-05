@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('tracker', {
   // ── API ──
   submitFlight: (record)     => ipcRenderer.invoke('api:submitFlight', record),
 
+  // ── ACARS ──
+  acarsStart:      (flightInfo) => ipcRenderer.invoke('acars:start', flightInfo),
+  acarsStop:       ()           => ipcRenderer.invoke('acars:stop'),
+  acarsSubmitPirep:(pirep)      => ipcRenderer.invoke('acars:submitPirep', pirep),
+  acarsGetMessages:()           => ipcRenderer.invoke('acars:getMessages'),
+  acarsGetPireps:  ()           => ipcRenderer.invoke('acars:getPireps'),
+
   // ── Window controls ──
   minimizeWindow: ()  => ipcRenderer.send('window:minimize'),
   maximizeWindow: ()  => ipcRenderer.send('window:maximize'),
@@ -40,6 +47,11 @@ contextBridge.exposeInMainWorld('tracker', {
       'flight:event',
       'flight:complete',
       'api:submit',
+      'acars:messages',
+      'acars:pirep-alerts',
+      'acars:pireps-updated',
+      'acars:pirep-submitted',
+      'acars:error',
     ];
     if (allowed.includes(channel)) {
       const listener = (_, ...args) => callback(...args);

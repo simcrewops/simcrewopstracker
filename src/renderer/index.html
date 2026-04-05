@@ -209,14 +209,56 @@
       <div class="pirep-panel">
         <div class="pirep-header">
           <div class="pirep-title">Pilot Weather Reports</div>
-          <div class="pirep-badge">Network</div>
+          <div class="pirep-badge" id="pirep-count-badge">Network</div>
         </div>
         <div class="pirep-list" id="pirep-list">
-          <div class="board-empty">No PIREPs available — connect to view reports</div>
+          <div class="board-empty" id="pirep-empty">No PIREPs available — connect to view reports</div>
         </div>
         <div class="pirep-submit" id="btn-pirep-submit">
           <span class="pirep-submit-icon">+</span>
           <span>Submit a PIREP</span>
+        </div>
+      </div>
+
+      <!-- PIREP Submit Form (hidden by default) -->
+      <div id="pirep-form-overlay" style="display:none">
+        <div class="pirep-form">
+          <div class="pirep-form-header">
+            <h3>Submit Pilot Report</h3>
+            <button class="btn-ghost" id="btn-pirep-form-close">&#x2715;</button>
+          </div>
+          <div class="pirep-form-body">
+            <div class="form-group">
+              <label>Report Type</label>
+              <select class="form-input" id="pirep-type">
+                <option value="TURBULENCE">Turbulence</option>
+                <option value="ICING">Icing</option>
+                <option value="VISIBILITY">Visibility</option>
+                <option value="WINDS">Winds</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Severity</label>
+              <select class="form-input" id="pirep-severity">
+                <option value="LIGHT">Light</option>
+                <option value="MODERATE">Moderate</option>
+                <option value="SEVERE">Severe</option>
+                <option value="EXTREME">Extreme</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Details (optional)</label>
+              <input class="form-input" type="text" id="pirep-message"
+                     placeholder="e.g., Continuous moderate chop FL350-FL370" maxlength="500" />
+            </div>
+            <div class="pirep-form-position" id="pirep-form-position">
+              Position: — &nbsp; Alt: —
+            </div>
+          </div>
+          <div class="pirep-form-footer">
+            <button class="btn-ghost" id="btn-pirep-cancel">Cancel</button>
+            <button class="btn-primary-v4" id="btn-pirep-send">Submit PIREP</button>
+          </div>
         </div>
       </div>
     </div>
@@ -229,7 +271,7 @@
           <div class="acars-unread" id="acars-unread" style="display:none">0</div>
         </div>
         <div class="acars-messages" id="acars-messages">
-          <div class="board-empty">No messages — connect to SimCrewOps</div>
+          <div class="board-empty" id="acars-empty">No messages — start a flight to receive ACARS</div>
         </div>
       </div>
     </div>
