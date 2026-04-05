@@ -30,6 +30,11 @@ class ApiClient {
       throw new Error('No API token configured. Please add your tracker API key in Settings.');
     }
 
+    // Downsample routePoints to every 5th point to keep the payload small.
+    // The full array can be up to ~2160 points (~180 kB JSON); 5x reduction → ~36 kB.
+    const rawRoute = flightRecord.routePoints ?? [];
+    const routePoints = rawRoute.filter((_, i) => i % 5 === 0);
+
     const body = {
       sessionDate:      flightRecord.sessionDate      ?? new Date().toISOString().split('T')[0],
       aircraft:         flightRecord.aircraft          ?? 'UNKN',
@@ -44,6 +49,9 @@ class ApiClient {
       maxGForce:        flightRecord.maxGForce         ?? null,
       simVersion:       flightRecord.simVersion        ?? 'MSFS 2024',
       source:           'simconnect',
+      routePoints,
+      // V5 scoring input — present when ScoringCollector is wired in
+      scoringInput:     flightRecord.scoringInput      ?? null,
     };
 
     const response = await this._request('POST', '/api/sim-sessions', body);
