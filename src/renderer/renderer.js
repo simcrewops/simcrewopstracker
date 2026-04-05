@@ -13,10 +13,13 @@ const state = {
 };
 
 // ── Leaflet map state ──────────────────────────────────────────────────────
-let leafletMap    = null;
-let planeMarker   = null;
-let routePolyline = null;
-let depMarker     = null;
+let leafletMap       = null;
+let planeMarker      = null;
+let routePolyline    = null;
+let depMarker        = null;
+let lastPlaneHeading = null; // track last heading to skip unnecessary icon rebuilds
+let lastPanLat       = null; // track last pan position to skip unnecessary pans
+let lastPanLon       = null;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -98,14 +101,21 @@ function updateMap(data) {
   if (!leafletMap || !data) return;
 
   const { lat, lon, heading } = data;
-  const icon = makePlaneIcon('#22ff66', 32, heading ?? 0, true);
+  const hdg = heading ?? 0;
+
+  // Only rebuild the divIcon when heading has changed by more than 5°
+  const headingChanged = lastPlaneHeading === null || Math.abs(hdg - lastPlaneHeading) > 5;
 
   if (planeMarker) {
     planeMarker.setLatLng([lat, lon]);
-    planeMarker.setIcon(icon);
+    if (headingChanged) {
+      planeMarker.setIcon(makePlaneIcon('#22ff66', 32, hdg, true));
+      lastPlaneHeading = hdg;
+    }
   } else {
-    planeMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 })
-      .addTo(leafletMap);
+    const icon = makePlaneIcon('#22ff66', 32, hdg, true);
+    planeMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 }).addTo(leafletMap);
+    lastPlaneHeading = hdg;
   }
 
   // Update route polyline
@@ -123,8 +133,15 @@ function updateMap(data) {
     }
   }
 
-  // Smooth pan to current position
-  leafletMap.panTo([lat, lon], { animate: true, duration: 0.5 });
+  // Only pan when the aircraft has moved more than 0.005°
+  const movedEnough = lastPanLat === null
+    || Math.abs(lat - lastPanLat) > 0.005
+    || Math.abs(lon - lastPanLon) > 0.005;
+  if (movedEnough) {
+    leafletMap.panTo([lat, lon], { animate: true, duration: 0.5 });
+    lastPanLat = lat;
+    lastPanLon = lon;
+  }
 }
 
 function addDepMarker(lat, lon, icao) {
@@ -308,20 +325,20 @@ function phaseDisplayName(phase) {
 function updateMetrics(d) {
   if (!d) return;
 
-  $('m-altitude').innerHTML = `${d.altitude.toLocaleString()}<span class="metric-unit">ft</span>`;
-  $('m-ias').innerHTML      = `${d.ias}<span class="metric-unit">kt</span>`;
+  $('mv-altitude').textContent = d.altitude.toLocaleString();
+  $('mv-ias').textContent      = String(d.ias);
 
   const vsColor = d.vs > 0 ? '#6ee7b7' : d.vs < -800 ? '#f87171' : '#fcd34d';
-  $('m-vs').style.color = vsColor;
-  $('m-vs').innerHTML   = `${d.vs > 0 ? '+' : ''}${d.vs.toLocaleString()}<span class="metric-unit">fpm</span>`;
+  $('m-vs').style.color    = vsColor;
+  $('mv-vs').textContent   = `${d.vs > 0 ? '+' : ''}${d.vs.toLocaleString()}`;
 
-  $('m-hdg').innerHTML  = `${String(d.heading).padStart(3, '0')}<span class="metric-unit">°</span>`;
-  $('m-gs').innerHTML   = `${d.groundSpeed}<span class="metric-unit">kt</span>`;
-  $('m-fuel').innerHTML = `${Math.round(d.fuelGallons).toLocaleString()}<span class="metric-unit">gal</span>`;
+  $('mv-hdg').textContent  = String(d.heading).padStart(3, '0');
+  $('mv-gs').textContent   = String(d.groundSpeed);
+  $('mv-fuel').textContent = Math.round(d.fuelGallons).toLocaleString();
 
   const gColor = d.gForce > 2 ? '#f87171' : d.gForce > 1.5 ? '#fcd34d' : 'inherit';
-  $('m-gforce').style.color = gColor;
-  $('m-gforce').innerHTML   = `${d.gForce.toFixed(2)}<span class="metric-unit">G</span>`;
+  $('m-gforce').style.color  = gColor;
+  $('mv-gforce').textContent = d.gForce.toFixed(2);
 
   const gear  = d.gearDown ? '⚙ Gear↓' : '⚙ Gear↑';
   const flaps = d.flapsIndex > 0 ? `Flaps ${d.flapsIndex}` : 'Flaps 0';
@@ -380,25 +397,24 @@ async function verifyToken() {
 
   try {
     if (!window.tracker) throw new Error('Not running in Electron');
-    await window.tracker.submitFlight({
-      sessionDate: new Date().toISOString().split('T')[0],
-      aircraft:    'TEST',
-      duration:    1,
-      simVersion:  'MSFS 2024',
-    });
-    status.style.background = 'rgba(74,222,128,0.1)';
-    status.style.color      = '#34d399';
-    status.textContent      = '✓ API key is valid and connected';
-  } catch (err) {
-    if (err.message?.includes('token') || err.message?.includes('Unauthorized')) {
-      status.style.background = 'rgba(248,113,113,0.1)';
-      status.style.color      = '#f87171';
-      status.textContent      = '✗ Invalid API key — check your SimCrewOps settings';
+    const result = await window.tracker.verifyToken();
+    if (result.success) {
+      status.style.background = 'rgba(74,222,128,0.1)';
+      status.style.color      = '#34d399';
+      status.textContent      = '✓ API key is valid and connected';
     } else {
-      status.style.background = 'rgba(250,204,21,0.1)';
-      status.style.color      = '#fcd34d';
-      status.textContent      = `⚠ ${err.message}`;
+      const isAuthErr = result.error?.includes('token') || result.error?.includes('Unauthorized')
+        || result.error?.includes('401') || result.error?.includes('403');
+      status.style.background = isAuthErr ? 'rgba(248,113,113,0.1)' : 'rgba(250,204,21,0.1)';
+      status.style.color      = isAuthErr ? '#f87171' : '#fcd34d';
+      status.textContent      = isAuthErr
+        ? '✗ Invalid API key — check your SimCrewOps settings'
+        : `⚠ ${result.error}`;
     }
+  } catch (err) {
+    status.style.background = 'rgba(250,204,21,0.1)';
+    status.style.color      = '#fcd34d';
+    status.textContent      = `⚠ ${err.message}`;
   }
 }
 
@@ -694,11 +710,16 @@ window.tracker.on('simconnect:status', ({ state: s, message, info }) => {
   } else if (s === 'disconnected') {
     addEvent('info', 'SimConnect disconnected');
     setPhase('idle');
-    ['m-altitude','m-ias','m-vs','m-hdg','m-gs','m-fuel','m-gforce'].forEach(id => {
-      $(id).innerHTML = '—';
+    ['mv-altitude','mv-ias','mv-vs','mv-hdg','mv-gs','mv-fuel','mv-gforce'].forEach(id => {
+      $(id).textContent = '—';
     });
-    $('m-systems').innerHTML = '—';
+    $('m-vs').style.color     = '';
+    $('m-gforce').style.color = '';
+    $('m-systems').textContent = '—';
     state.routePoints = [];
+    lastPlaneHeading  = null;
+    lastPanLat        = null;
+    lastPanLon        = null;
     resetMap();
   } else if (s === 'error') {
     addEvent('error', message || 'Connection error');

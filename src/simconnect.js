@@ -25,10 +25,11 @@ const RECONNECT_DELAY = 5000;
 class SimConnectManager extends EventEmitter {
   constructor() {
     super();
-    this._handle       = null;
-    this._connected    = false;
-    this._reconnecting = false;
-    this._stopReconnect = false;
+    this._handle         = null;
+    this._connected      = false;
+    this._reconnecting   = false;
+    this._stopReconnect  = false;
+    this._reconnectTimer = null;
   }
 
   isConnected() {
@@ -135,7 +136,8 @@ class SimConnectManager extends EventEmitter {
       // Schedule reconnect
       if (!this._stopReconnect) {
         this._reconnecting = true;
-        setTimeout(() => {
+        this._reconnectTimer = setTimeout(() => {
+          this._reconnectTimer = null;
           if (!this._stopReconnect && !this._connected) {
             this._connect();
           }
@@ -184,7 +186,8 @@ class SimConnectManager extends EventEmitter {
     // Auto-reconnect
     if (!this._stopReconnect) {
       this._reconnecting = true;
-      setTimeout(() => {
+      this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = null;
         if (!this._stopReconnect && !this._connected) {
           this._connect();
         }
@@ -195,6 +198,10 @@ class SimConnectManager extends EventEmitter {
   disconnect() {
     this._stopReconnect = true;
     this._reconnecting  = false;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this._handle) {
       try { this._handle.removeAllListeners(); } catch {}
       try { this._handle.close(); } catch {}

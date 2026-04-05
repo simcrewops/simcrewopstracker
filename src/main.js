@@ -33,39 +33,76 @@ let acarsClient = null;
 let isQuitting = false;
 let heartbeatInterval = null;
 
-// ── Create tray icon programmatically ─────────────────────────────────────────
-function createTrayIcon(status = 'idle') {
-  // 16x16 PNG generated as a data URL based on status
-  const colors = {
-    idle:        '#64748b',
-    connecting:  '#f59e0b',
-    connected:   '#10b981',
-    tracking:    '#3b82f6',
-    error:       '#ef4444',
-  };
-  const color = colors[status] || colors.idle;
+// ── Tray icon cache ───────────────────────────────────────────────────────────
+// All 5 status icons are built once at startup so updateTrayMenu() never calls
+// canvas or nativeImage on the hot path.
+const trayIconCache = {};
+let lastTrayStatus  = null;
 
-  // Use Electron nativeImage to create a simple colored circle icon
-  const { createCanvas } = (() => {
-    try { return require('canvas'); } catch { return null; }
-  })() || {};
+const TRAY_COLORS = {
+  idle:       '#64748b',
+  connecting: '#f59e0b',
+  connected:  '#10b981',
+  tracking:   '#3b82f6',
+  error:      '#ef4444',
+};
 
-  if (createCanvas) {
-    const canvas = createCanvas(16, 16);
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, 16, 16);
-    ctx.beginPath();
-    ctx.arc(8, 8, 7, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    return nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
-  }
-
-  // Fallback: hard-coded 1x1 pixel image
+function _nativeImageFallback() {
   return nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAA' +
     'JklEQVQ4jWNgYGD4z8BQDwAAAP//AwBDAAEA8P8AAAD//wMAQwABAPD/AAAAA=='
   );
+}
+
+function buildTrayIconCache() {
+  const { createCanvas, loadImage } = (() => {
+    try { return require('canvas'); } catch { return {}; }
+  })();
+
+  // ── Step 1: build colored-circle fallbacks synchronously ──────────────────
+  if (createCanvas) {
+    for (const [status, color] of Object.entries(TRAY_COLORS)) {
+      const canvas = createCanvas(16, 16);
+      const ctx    = canvas.getContext('2d');
+      ctx.clearRect(0, 0, 16, 16);
+      ctx.beginPath();
+      ctx.arc(8, 8, 7, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      trayIconCache[status] = nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
+    }
+  } else {
+    const fb = _nativeImageFallback();
+    for (const status of Object.keys(TRAY_COLORS)) trayIconCache[status] = fb;
+  }
+
+  // ── Step 2: async upgrade — real logo + small status dot ──────────────────
+  if (createCanvas && loadImage) {
+    const logoPath = path.join(__dirname, '..', '..', 'public', 'logo-icon-transparent.png');
+    loadImage(logoPath).then((logo) => {
+      const SZ = 22;
+      for (const [status, color] of Object.entries(TRAY_COLORS)) {
+        const canvas = createCanvas(SZ, SZ);
+        const ctx    = canvas.getContext('2d');
+        ctx.clearRect(0, 0, SZ, SZ);
+        ctx.drawImage(logo, 0, 0, SZ, SZ);
+        // Small status-indicator dot in bottom-right corner
+        const r = 5;
+        ctx.beginPath();
+        ctx.arc(SZ - r - 1, SZ - r - 1, r, 0, Math.PI * 2);
+        ctx.fillStyle   = color;
+        ctx.fill();
+        ctx.strokeStyle = '#0a0f1a';
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+        trayIconCache[status] = nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
+      }
+      // Refresh tray with the better icon now that cache is updated
+      if (tray && lastTrayStatus) {
+        tray.setImage(trayIconCache[lastTrayStatus] ?? trayIconCache.idle);
+      }
+    }).catch(() => { /* keep circle fallbacks */ });
+  }
 }
 
 // ── Create main window ────────────────────────────────────────────────────────
@@ -100,9 +137,13 @@ function createWindow() {
     }
   });
 
+  let _resizeTimer = null;
   mainWindow.on('resize', () => {
-    const [width, height] = mainWindow.getSize();
-    store.set('windowBounds', { width, height });
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+      const [width, height] = mainWindow.getSize();
+      store.set('windowBounds', { width, height });
+    }, 500);
   });
 
   mainWindow.on('close', (e) => {
@@ -120,9 +161,10 @@ function createWindow() {
 
 // ── Create system tray ────────────────────────────────────────────────────────
 function createTray() {
-  const icon = createTrayIcon('idle');
-  tray = new Tray(icon);
+  buildTrayIconCache();
+  tray = new Tray(trayIconCache.idle ?? _nativeImageFallback());
   tray.setToolTip('SimCrewOps Tracker');
+  lastTrayStatus = 'idle';
 
   updateTrayMenu('idle');
 
@@ -139,6 +181,7 @@ function createTray() {
 
 function updateTrayMenu(status) {
   if (!tray) return;
+
   const menu = Menu.buildFromTemplate([
     { label: 'SimCrewOps Tracker', enabled: false },
     { label: `Status: ${status.charAt(0).toUpperCase() + status.slice(1)}`, enabled: false },
@@ -158,8 +201,11 @@ function updateTrayMenu(status) {
   ]);
   tray.setContextMenu(menu);
 
-  const icon = createTrayIcon(status);
-  tray.setImage(icon);
+  // Only swap the image when the status actually changed
+  if (status !== lastTrayStatus) {
+    tray.setImage(trayIconCache[status] ?? trayIconCache.idle ?? _nativeImageFallback());
+    lastTrayStatus = status;
+  }
 }
 
 // ── SimConnect connection management ──────────────────────────────────────────
@@ -175,11 +221,29 @@ function attemptSimConnect() {
   simManager.connect();
 }
 
+function startHeartbeat() {
+  if (heartbeatInterval) return; // already running
+  const token = store.get('apiToken');
+  if (!token || !apiClient) return;
+  apiClient.sendHeartbeat(); // immediate ping
+  heartbeatInterval = setInterval(() => {
+    if (apiClient && store.get('apiToken')) apiClient.sendHeartbeat();
+  }, 30_000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
+
 function setupSimConnectListeners() {
   simManager.on('connected', (info) => {
     sendToRenderer('simconnect:status', { state: 'connected', info });
     updateTrayMenu('connected');
     flightTracker.start();
+    startHeartbeat();
   });
 
   simManager.on('disconnected', () => {
@@ -188,6 +252,7 @@ function setupSimConnectListeners() {
     flightTracker.stop();
     sendToRenderer('flight:data', null);
     sendToRenderer('flight:phase', { phase: 'idle' });
+    stopHeartbeat();
   });
 
   simManager.on('error', (err) => {
@@ -311,6 +376,17 @@ function registerIpcHandlers() {
     return true;
   });
 
+  // Token verification (GET /api/tracker-key — does not create any records)
+  ipcMain.handle('api:verifyToken', async () => {
+    if (!apiClient) return { success: false, error: 'API client not initialized' };
+    try {
+      await apiClient.verifyToken();
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // Manual flight submit
   ipcMain.handle('api:submitFlight', async (_, flightRecord) => {
     if (!apiClient) return { success: false, error: 'API client not initialized' };
@@ -411,18 +487,8 @@ app.on('ready', async () => {
   registerIpcHandlers();
   createWindow();
   createTray();
-
-  // Send a heartbeat to the web app every 30 s so the Sim Tracker page can
-  // show a real "connected" status instead of always showing "disconnected".
-  heartbeatInterval = setInterval(() => {
-    if (apiClient && store.get('apiToken')) {
-      apiClient.sendHeartbeat();
-    }
-  }, 30_000);
-  // Also send one immediately on startup so the status updates right away.
-  if (apiClient && store.get('apiToken')) {
-    apiClient.sendHeartbeat();
-  }
+  // Heartbeat is started in setupSimConnectListeners 'connected' handler,
+  // so it only runs while SimConnect is active and a token is configured.
 });
 
 app.on('window-all-closed', () => {
@@ -437,7 +503,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  stopHeartbeat();
   if (simManager) simManager.disconnect();
 });
 
