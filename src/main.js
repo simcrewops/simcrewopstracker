@@ -4,9 +4,6 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = 
 const path = require('path');
 const Store = require('electron-store');
 
-// Allow requiring native modules packaged with app
-app.allowRendererProcessReuse = true;
-
 // ── Persistent settings store ─────────────────────────────────────────────────
 const store = new Store({
   name: 'simcrewops-tracker',
@@ -23,6 +20,7 @@ const store = new Store({
 let SimConnectManager = null;
 let FlightTracker = null;
 let ApiClient = null;
+let ScoringCollector = null;
 
 let mainWindow = null;
 let tray = null;
@@ -30,8 +28,13 @@ let simManager = null;
 let flightTracker = null;
 let apiClient = null;
 let acarsClient = null;
+let scoringCollector = null;
 let isQuitting = false;
 let heartbeatInterval = null;
+let lastSimData = null;  // most recent data frame; used for phase-change context
+
+// Messages queued while the renderer is still loading
+const rendererQueue = [];
 
 // ── Create tray icon programmatically ─────────────────────────────────────────
 function createTrayIcon(status = 'idle') {
@@ -94,6 +97,12 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    // Flush any messages queued before the renderer was ready
+    const wc = mainWindow.webContents;
+    while (rendererQueue.length > 0) {
+      const msg = rendererQueue.shift();
+      wc.send(msg.channel, msg.data);
+    }
     // Auto-connect if enabled
     if (store.get('autoConnect') && simManager) {
       setTimeout(() => attemptSimConnect(), 1000);
@@ -164,9 +173,19 @@ function updateTrayMenu(status) {
 
 // ── SimConnect connection management ──────────────────────────────────────────
 function sendToRenderer(channel, data) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, data);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  if (wc.isLoading()) {
+    // Queue until the renderer is ready; cap at 200 messages to bound memory
+    if (rendererQueue.length < 200) rendererQueue.push({ channel, data });
+    return;
   }
+  // Flush any queued messages first (preserves ordering)
+  while (rendererQueue.length > 0) {
+    const msg = rendererQueue.shift();
+    wc.send(msg.channel, msg.data);
+  }
+  wc.send(channel, data);
 }
 
 function attemptSimConnect() {
@@ -196,6 +215,13 @@ function setupSimConnectListeners() {
   });
 
   simManager.on('data', (flightData) => {
+    lastSimData = flightData;
+
+    // Scoring collector sees data BEFORE the phase may change
+    if (scoringCollector) {
+      scoringCollector.onData(flightData, flightTracker.getCurrentPhase());
+    }
+
     flightTracker.update(flightData);
     sendToRenderer('flight:data', flightData);
 
@@ -212,6 +238,11 @@ function setupSimConnectListeners() {
 
 function setupFlightTrackerListeners() {
   flightTracker.on('phase', (phase) => {
+    // Notify scoring collector of the phase transition (with current data frame)
+    if (scoringCollector) {
+      scoringCollector.onPhaseChange(phase.phase, phase.prev, lastSimData);
+    }
+
     sendToRenderer('flight:phase', phase);
     if (phase.phase === 'tracking' || phase.phase === 'cruise') {
       updateTrayMenu('tracking');
@@ -232,6 +263,12 @@ function setupFlightTrackerListeners() {
   });
 
   flightTracker.on('flightComplete', async (flightRecord) => {
+    // Attach scoring input from the collector before submitting
+    if (scoringCollector) {
+      flightRecord.scoringInput = scoringCollector.getScoreInput();
+      scoringCollector.reset();
+    }
+
     sendToRenderer('flight:complete', flightRecord);
     updateTrayMenu('connected');
 
@@ -393,13 +430,18 @@ app.on('ready', async () => {
     SimConnectManager = require('./simconnect');
     FlightTracker     = require('./flight-tracker');
     ApiClient         = require('./api-client');
+    ScoringCollector  = require('./scoring-collector');
 
     const AcarsClient = require('./acars-client');
 
-    simManager    = new SimConnectManager();
-    flightTracker = new FlightTracker();
-    apiClient     = new ApiClient(store.get('apiUrl'), store.get('apiToken'));
-    acarsClient   = new AcarsClient(apiClient);
+    simManager        = new SimConnectManager();
+    flightTracker     = new FlightTracker();
+    apiClient         = new ApiClient(store.get('apiUrl'), store.get('apiToken'));
+    scoringCollector  = new ScoringCollector();
+    acarsClient       = new AcarsClient(apiClient);
+
+    simManager.setMaxListeners(20);
+    flightTracker.setMaxListeners(20);
 
     setupSimConnectListeners();
     setupFlightTrackerListeners();

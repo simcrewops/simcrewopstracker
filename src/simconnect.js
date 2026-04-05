@@ -85,6 +85,15 @@ class SimConnectManager extends EventEmitter {
       handle.addToDataDefinition(DEF_ID, 'FUEL TOTAL QUANTITY',         'gallons',          d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'G FORCE',                     'gforce',           d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'AUTOPILOT MASTER',            'bool',             d.FLOAT64);
+      // ── Extended SimVars for V5 scoring ──────────────────────────────────────
+      handle.addToDataDefinition(DEF_ID, 'LIGHT BEACON',               'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT NAV',                  'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT STROBE',               'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT LANDING',              'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'BRAKE PARKING POSITION',     'percent',          d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE BANK DEGREES',         'degrees',          d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE PITCH DEGREES',        'degrees',          d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'NUMBER OF ENGINES',          'number',           d.FLOAT64);
 
       // Request data every sim second (SECOND period)
       handle.requestDataOnSimObject(
@@ -162,8 +171,17 @@ class SimConnectManager extends EventEmitter {
         flapsIndex:  Math.round(buf.readFloat64()),
         fuelGallons: Math.round(buf.readFloat64() * 10) / 10,
         gForce:      Math.round(buf.readFloat64() * 100) / 100,
-        autopilot:   buf.readFloat64() > 0.5,
-        timestamp:   Date.now(),
+        autopilot:    buf.readFloat64() > 0.5,
+        // Extended fields for V5 scoring
+        beaconLight:  buf.readFloat64() > 0.5,
+        navLight:     buf.readFloat64() > 0.5,
+        strobeLight:  buf.readFloat64() > 0.5,
+        landingLight: buf.readFloat64() > 0.5,
+        parkingBrake: buf.readFloat64() > 50,   // percent: 100 = fully set
+        bankDeg:      buf.readFloat64(),          // signed degrees; positive = right bank
+        pitchDeg:     buf.readFloat64(),          // signed degrees; positive = nose up
+        engineCount:  Math.round(buf.readFloat64()),
+        timestamp:    Date.now(),
       };
     } catch (err) {
       console.error('[SimConnect] Failed to parse SimData:', err);
