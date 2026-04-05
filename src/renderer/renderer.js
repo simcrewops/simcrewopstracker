@@ -339,14 +339,37 @@ function updateMetrics(d) {
   updateMap(d);
 }
 
+// ── Auth state UI ──────────────────────────────────────────────────────────
+function applyAuthState(auth) {
+  const signedIn  = $('auth-signed-in');
+  const signedOut = $('auth-signed-out');
+  if (!signedIn || !signedOut) return;
+
+  if (auth && auth.isSignedIn && auth.user) {
+    signedIn.style.display  = 'block';
+    signedOut.style.display = 'none';
+    const name = auth.user.name || auth.user.username || auth.user.email || 'Signed In';
+    $('auth-user-name').textContent  = name;
+    $('auth-user-email').textContent = auth.user.email || '';
+  } else {
+    signedIn.style.display  = 'none';
+    signedOut.style.display = 'block';
+  }
+}
+
 // ── Settings panel ─────────────────────────────────────────────────────────
 async function openSettings() {
   const s = window.tracker ? await window.tracker.loadSettings() : {};
   $('inp-api-url').value        = s.apiUrl   || 'https://simcrewops.com';
-  $('inp-api-token').value      = s.apiToken || '';
   $('chk-auto-connect').checked = !!s.autoConnect;
   $('chk-tray').checked         = !!s.minimizeToTray;
-  $('verify-status').style.display = 'none';
+
+  // Show current auth state
+  if (window.tracker) {
+    const auth = await window.tracker.getAuthStatus();
+    applyAuthState(auth);
+  }
+
   settingsOverlay.classList.add('open');
 }
 
@@ -357,44 +380,12 @@ function closeSettings() {
 async function saveSettings() {
   const settings = {
     apiUrl:         $('inp-api-url').value.trim(),
-    apiToken:       $('inp-api-token').value.trim(),
     autoConnect:    $('chk-auto-connect').checked,
     minimizeToTray: $('chk-tray').checked,
   };
   if (window.tracker) await window.tracker.saveSettings(settings);
   closeSettings();
   addEvent('info', 'Settings saved');
-}
-
-async function verifyToken() {
-  const status = $('verify-status');
-  status.style.display    = 'block';
-  status.style.background = 'rgba(255,255,255,0.04)';
-  status.style.color      = 'rgba(255,255,255,0.5)';
-  status.textContent      = 'Verifying…';
-
-  if (window.tracker) await window.tracker.saveSettings({
-    apiUrl:   $('inp-api-url').value.trim(),
-    apiToken: $('inp-api-token').value.trim(),
-  });
-
-  try {
-    if (!window.tracker) throw new Error('Not running in Electron');
-    const result = await window.tracker.verifyToken();
-    if (result.success) {
-      status.style.background = 'rgba(74,222,128,0.1)';
-      status.style.color      = '#34d399';
-      status.textContent      = '✓ API key is valid and connected';
-    } else {
-      status.style.background = 'rgba(248,113,113,0.1)';
-      status.style.color      = '#f87171';
-      status.textContent      = `✗ ${result.error || 'Invalid API key — check your SimCrewOps settings'}`;
-    }
-  } catch (err) {
-    status.style.background = 'rgba(250,204,21,0.1)';
-    status.style.color      = '#fcd34d';
-    status.textContent      = `⚠ ${err.message}`;
-  }
 }
 
 // ── Flight complete banner ─────────────────────────────────────────────────
@@ -525,6 +516,16 @@ window.tracker.on('api:submit', ({ success, error }) => {
   }
 });
 
+window.tracker.on('auth:stateChanged', (auth) => {
+  applyAuthState(auth);
+  if (auth.isSignedIn && auth.user) {
+    const name = auth.user.name || auth.user.email || 'user';
+    addEvent('info', `Signed in as ${name}`);
+  } else {
+    addEvent('info', 'Signed out of SimCrewOps');
+  }
+});
+
 } // end if (window.tracker)
 
 // ── Button handlers ────────────────────────────────────────────────────────
@@ -557,17 +558,22 @@ $('btn-settings').addEventListener('click', openSettings);
 $('btn-settings-close').addEventListener('click', closeSettings);
 $('btn-settings-cancel').addEventListener('click', closeSettings);
 $('btn-settings-save').addEventListener('click', saveSettings);
-$('btn-verify-token').addEventListener('click', verifyToken);
+
+$('btn-sign-in').addEventListener('click', () => {
+  if (window.tracker) window.tracker.signIn();
+});
+
+$('btn-sign-out').addEventListener('click', async () => {
+  if (window.tracker) {
+    await window.tracker.signOut();
+    applyAuthState({ isSignedIn: false, user: null });
+  }
+});
 
 $('btn-submit-flight').addEventListener('click', submitFlight);
 $('btn-dismiss-banner').addEventListener('click', () => {
   completeBanner.classList.remove('show');
   state.pendingFlight = null;
-});
-
-$('link-api-key').addEventListener('click', (e) => {
-  e.preventDefault();
-  if (window.tracker) window.tracker.openExternal('https://simcrewops.com/sim-tracker');
 });
 
 settingsOverlay.addEventListener('click', (e) => {
@@ -595,6 +601,11 @@ async function init() {
     const appState = await window.tracker.getState();
     if (appState.simConnected) {
       setSimStatus('connected');
+    }
+
+    // Apply initial auth state
+    if (appState.auth) {
+      applyAuthState(appState.auth);
     }
 
     // Version

@@ -12,10 +12,10 @@ const store = new Store({
   name: 'simcrewops-tracker',
   defaults: {
     apiUrl: 'https://simcrewops.com',
-    apiToken: '',
     autoConnect: true,
     minimizeToTray: true,
     windowBounds: { width: 900, height: 680 },
+    userInfo: null,
   },
 });
 
@@ -25,6 +25,7 @@ let FlightTracker = null;
 let ApiClient = null;
 
 let mainWindow = null;
+let authWindow = null;
 let tray = null;
 let simManager = null;
 let flightTracker = null;
@@ -32,9 +33,115 @@ let apiClient = null;
 let isQuitting = false;
 let heartbeatInterval = null;
 
+// ── Auth state ────────────────────────────────────────────────────────────────
+let authState = {
+  isSignedIn: false,
+  user: null,
+};
+
+// ── Get a fresh Clerk session token from the hidden auth window ───────────────
+async function getClerkToken() {
+  if (!authWindow || authWindow.isDestroyed()) return null;
+  try {
+    const token = await authWindow.webContents.executeJavaScript(
+      'window.Clerk && window.Clerk.session ? window.Clerk.session.getToken() : null'
+    );
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Capture signed-in user info from the auth window ─────────────────────────
+async function captureAuthState() {
+  if (!authWindow || authWindow.isDestroyed()) return;
+  try {
+    const result = await authWindow.webContents.executeJavaScript(`
+      (async () => {
+        if (!window.Clerk || !window.Clerk.session) return null;
+        const token = await window.Clerk.session.getToken();
+        const user  = window.Clerk.user;
+        if (!token || !user) return null;
+        return {
+          token,
+          user: {
+            id:       user.id,
+            email:    user.primaryEmailAddress?.emailAddress ?? '',
+            name:     user.fullName || (user.firstName ? (user.firstName + ' ' + (user.lastName || '')).trim() : ''),
+            username: user.username ?? '',
+          },
+        };
+      })()
+    `);
+
+    if (result && result.user) {
+      authState = { isSignedIn: true, user: result.user };
+      store.set('userInfo', result.user);
+      sendToRenderer('auth:stateChanged', authState);
+    } else {
+      authState = { isSignedIn: false, user: null };
+      store.set('userInfo', null);
+      sendToRenderer('auth:stateChanged', authState);
+    }
+  } catch (err) {
+    console.error('[auth] Failed to capture auth state:', err.message);
+  }
+}
+
+// ── Create the hidden auth window that holds the Clerk session ────────────────
+async function createAuthWindow() {
+  if (authWindow && !authWindow.isDestroyed()) return;
+
+  authWindow = new BrowserWindow({
+    width: 520,
+    height: 680,
+    show: false,
+    title: 'SimCrewOps — Sign In',
+    backgroundColor: '#0a0f1a',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      // Use default session so Clerk cookies persist between app restarts
+    },
+  });
+
+  // Prevent navigation away from the web app domain
+  authWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // When the user finishes signing in, Clerk redirects to the dashboard.
+  // We detect that, capture the session, then hide the window.
+  authWindow.webContents.on('did-navigate', async (_, url) => {
+    const isAuthPage = url.includes('/sign-in') || url.includes('/sign-up') ||
+                       url.includes('/login')   || url.includes('/register');
+    if (!isAuthPage) {
+      await captureAuthState();
+      if (authState.isSignedIn && authWindow && !authWindow.isDestroyed()) {
+        authWindow.hide();
+      }
+    }
+  });
+
+  // Also try to capture state after the initial load (persisted session)
+  authWindow.webContents.on('did-finish-load', async () => {
+    await captureAuthState();
+  });
+
+  authWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      authWindow.hide();
+    }
+  });
+
+  const webAppUrl = store.get('apiUrl', 'https://simcrewops.com');
+  await authWindow.loadURL(webAppUrl).catch(() => {});
+}
+
 // ── Create tray icon programmatically ─────────────────────────────────────────
 function createTrayIcon(status = 'idle') {
-  // 16x16 PNG generated as a data URL based on status
   const colors = {
     idle:        '#64748b',
     connecting:  '#f59e0b',
@@ -44,7 +151,6 @@ function createTrayIcon(status = 'idle') {
   };
   const color = colors[status] || colors.idle;
 
-  // Use Electron nativeImage to create a simple colored circle icon
   const { createCanvas } = (() => {
     try { return require('canvas'); } catch { return null; }
   })() || {};
@@ -60,7 +166,6 @@ function createTrayIcon(status = 'idle') {
     return nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
   }
 
-  // Fallback: hard-coded 1x1 pixel image
   return nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAA' +
     'JklEQVQ4jWNgYGD4z8BQDwAAAP//AwBDAAEA8P8AAAD//wMAQwABAPD/AAAAA=='
@@ -93,7 +198,6 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    // Auto-connect if enabled
     if (store.get('autoConnect') && simManager) {
       setTimeout(() => attemptSimConnect(), 1000);
     }
@@ -216,17 +320,12 @@ function setupFlightTrackerListeners() {
     sendToRenderer('flight:event', { type: 'landing', ...event });
   });
 
-  flightTracker.on('highFreq', ({ enabled }) => {
-    if (simManager) simManager.setHighFreqMode(enabled);
-  });
-
   flightTracker.on('flightComplete', async (flightRecord) => {
     sendToRenderer('flight:complete', flightRecord);
     updateTrayMenu('connected');
 
-    // Auto-submit if token is configured
-    const token = store.get('apiToken');
-    if (token) {
+    // Auto-submit if signed in
+    if (authState.isSignedIn) {
       try {
         const result = await apiClient.submitFlight(flightRecord);
         sendToRenderer('api:submit', { success: true, data: result });
@@ -253,33 +352,34 @@ function registerIpcHandlers() {
     if (flightTracker) flightTracker.stopTracking();
   });
 
-  // Settings
+  // Settings (no API token anymore — auth is via Clerk)
   ipcMain.handle('settings:load', () => ({
-    apiUrl: store.get('apiUrl'),
-    apiToken: store.get('apiToken'),
-    autoConnect: store.get('autoConnect'),
+    apiUrl:         store.get('apiUrl'),
+    autoConnect:    store.get('autoConnect'),
     minimizeToTray: store.get('minimizeToTray'),
   }));
 
   ipcMain.handle('settings:save', (_, settings) => {
-    if (settings.apiUrl)   store.set('apiUrl', settings.apiUrl);
-    if (settings.apiToken !== undefined) store.set('apiToken', settings.apiToken);
-    if (settings.autoConnect !== undefined) store.set('autoConnect', settings.autoConnect);
+    if (settings.apiUrl !== undefined)        store.set('apiUrl', settings.apiUrl);
+    if (settings.autoConnect !== undefined)   store.set('autoConnect', settings.autoConnect);
     if (settings.minimizeToTray !== undefined) store.set('minimizeToTray', settings.minimizeToTray);
 
-    // Update api client
     if (apiClient) {
       apiClient.setBaseUrl(store.get('apiUrl'));
-      apiClient.setToken(store.get('apiToken'));
     }
+
+    // If the API URL changed, reload the auth window so Clerk points to the right server
+    if (settings.apiUrl && authWindow && !authWindow.isDestroyed()) {
+      authWindow.loadURL(settings.apiUrl).catch(() => {});
+    }
+
     return true;
   });
 
   // Manual flight submit
   ipcMain.handle('api:submitFlight', async (_, flightRecord) => {
     if (!apiClient) return { success: false, error: 'API client not initialized' };
-    const token = store.get('apiToken');
-    if (!token) return { success: false, error: 'No API token configured' };
+    if (!authState.isSignedIn) return { success: false, error: 'Not signed in. Please sign in first.' };
     try {
       const result = await apiClient.submitFlight(flightRecord);
       return { success: true, data: result };
@@ -288,37 +388,52 @@ function registerIpcHandlers() {
     }
   });
 
-  // Token verification
-  ipcMain.handle('api:verifyToken', async () => {
-    if (!apiClient) return { success: false, error: 'API client not initialized' };
-    const token = store.get('apiToken');
-    if (!token) return { success: false, error: 'No API token configured' };
-    try {
-      const valid = await apiClient.verifyToken();
-      return valid
-        ? { success: true }
-        : { success: false, error: 'Invalid API key — check your SimCrewOps settings' };
-    } catch (err) {
-      return { success: false, error: err.message };
+  // Auth: show sign-in window
+  ipcMain.handle('auth:signIn', async () => {
+    if (!authWindow || authWindow.isDestroyed()) {
+      await createAuthWindow();
     }
+    const webAppUrl = store.get('apiUrl', 'https://simcrewops.com');
+    // Navigate to sign-in page if not already there
+    const currentUrl = authWindow.webContents.getURL();
+    if (!currentUrl.includes('/sign-in') && !currentUrl.includes('/sign-up')) {
+      await authWindow.loadURL(`${webAppUrl}/sign-in`).catch(() => {});
+    }
+    authWindow.show();
+    authWindow.focus();
+    return true;
   });
 
-  // Open external links (validated to http/https only)
-  ipcMain.on('open:external', (_, url) => {
-    if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
-      shell.openExternal(url);
+  // Auth: sign out
+  ipcMain.handle('auth:signOut', async () => {
+    if (authWindow && !authWindow.isDestroyed()) {
+      try {
+        await authWindow.webContents.executeJavaScript(
+          'window.Clerk ? window.Clerk.signOut() : null'
+        );
+      } catch {}
     }
+    authState = { isSignedIn: false, user: null };
+    store.set('userInfo', null);
+    sendToRenderer('auth:stateChanged', authState);
+    return true;
   });
+
+  // Auth: get current state
+  ipcMain.handle('auth:getStatus', () => authState);
+
+  // Open external links
+  ipcMain.on('open:external', (_, url) => shell.openExternal(url));
 
   // App info
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('app:getState', () => ({
-    simConnected: simManager?.isConnected() ?? false,
+    simConnected:  simManager?.isConnected() ?? false,
     trackingActive: flightTracker?.isTracking() ?? false,
+    auth: authState,
     settings: {
-      apiUrl: store.get('apiUrl'),
-      apiToken: store.get('apiToken'),
-      autoConnect: store.get('autoConnect'),
+      apiUrl:         store.get('apiUrl'),
+      autoConnect:    store.get('autoConnect'),
       minimizeToTray: store.get('minimizeToTray'),
     },
   }));
@@ -337,7 +452,6 @@ function registerIpcHandlers() {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.on('ready', async () => {
-  // Lazy-load modules (they may require native modules)
   try {
     SimConnectManager = require('./simconnect');
     FlightTracker     = require('./flight-tracker');
@@ -345,7 +459,8 @@ app.on('ready', async () => {
 
     simManager    = new SimConnectManager();
     flightTracker = new FlightTracker();
-    apiClient     = new ApiClient(store.get('apiUrl'), store.get('apiToken'));
+    // Pass getClerkToken so ApiClient always uses a fresh JWT
+    apiClient     = new ApiClient(store.get('apiUrl'), getClerkToken);
 
     setupSimConnectListeners();
     setupFlightTrackerListeners();
@@ -357,15 +472,18 @@ app.on('ready', async () => {
   createWindow();
   createTray();
 
-  // Send a heartbeat to the web app every 30 s so the Sim Tracker page can
-  // show a real "connected" status instead of always showing "disconnected".
-  heartbeatInterval = setInterval(() => {
-    if (apiClient && store.get('apiToken')) {
+  // Load the hidden auth window early so Clerk can restore a persisted session
+  await createAuthWindow();
+
+  // Heartbeat every 30 s — only when signed in
+  heartbeatInterval = setInterval(async () => {
+    if (apiClient && authState.isSignedIn) {
       apiClient.sendHeartbeat();
     }
   }, 30_000);
-  // Also send one immediately on startup so the status updates right away.
-  if (apiClient && store.get('apiToken')) {
+
+  // Send one immediately on startup
+  if (apiClient && authState.isSignedIn) {
     apiClient.sendHeartbeat();
   }
 });
