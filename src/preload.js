@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld('tracker', {
   // ── API ──
   submitFlight: (record)     => ipcRenderer.invoke('api:submitFlight', record),
 
+  // ── Auth ──
+  signIn:        ()  => ipcRenderer.invoke('auth:signIn'),
+  signOut:       ()  => ipcRenderer.invoke('auth:signOut'),
+  getAuthStatus: ()  => ipcRenderer.invoke('auth:getStatus'),
+
   // ── Window controls ──
   minimizeWindow: ()  => ipcRenderer.send('window:minimize'),
   maximizeWindow: ()  => ipcRenderer.send('window:maximize'),
@@ -40,6 +45,7 @@ contextBridge.exposeInMainWorld('tracker', {
       'flight:event',
       'flight:complete',
       'api:submit',
+      'auth:stateChanged',
     ];
     if (allowed.includes(channel)) {
       const listener = (_, ...args) => callback(...args);

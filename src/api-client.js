@@ -4,7 +4,7 @@
  * SimCrewOps API client
  *
  * Sends completed flight records to simcrewops.com via the REST API.
- * Authentication uses a Bearer token stored in app settings.
+ * Authentication uses a Clerk session token obtained fresh before each request.
  */
 
 const https = require('https');
@@ -12,13 +12,17 @@ const http  = require('http');
 const { URL } = require('url');
 
 class ApiClient {
-  constructor(baseUrl, token) {
-    this._baseUrl = (baseUrl || 'https://simcrewops.com').replace(/\/$/, '');
-    this._token   = token || '';
+  /**
+   * @param {string} baseUrl - The web app base URL
+   * @param {() => Promise<string|null>} getToken - Async function that returns a fresh Clerk JWT
+   */
+  constructor(baseUrl, getToken) {
+    this._baseUrl  = (baseUrl || 'https://simcrewops.com').replace(/\/$/, '');
+    this._getToken = getToken || (async () => null);
   }
 
-  setBaseUrl(url) { this._baseUrl = (url || 'https://simcrewops.com').replace(/\/$/, ''); }
-  setToken(token) { this._token = token || ''; }
+  setBaseUrl(url)    { this._baseUrl  = (url || 'https://simcrewops.com').replace(/\/$/, ''); }
+  setGetToken(fn)    { this._getToken = fn; }
 
   /**
    * Submit a completed flight record to /api/sim-sessions
@@ -26,8 +30,9 @@ class ApiClient {
    * @returns {Promise<Object>} The created session from the server
    */
   async submitFlight(flightRecord) {
-    if (!this._token) {
-      throw new Error('No API token configured. Please add your tracker API key in Settings.');
+    const token = await this._getToken();
+    if (!token) {
+      throw new Error('Not signed in. Please sign in to SimCrewOps first.');
     }
 
     const body = {
@@ -36,42 +41,29 @@ class ApiClient {
       departure:        flightRecord.departure         ?? null,
       arrival:          flightRecord.arrival           ?? null,
       duration:         Math.max(1, flightRecord.duration ?? 1),
-      airTime:          flightRecord.airTime           ?? null,  // hours wheels-up to wheels-down
-      groundTime:       flightRecord.groundTime        ?? null,  // hours on ground (block minus air)
+      airTime:          flightRecord.airTime           ?? null,
+      groundTime:       flightRecord.groundTime        ?? null,
       landingRate:      flightRecord.landingRate       ?? null,
-      touchdownZoneHit: flightRecord.touchdownZoneHit ?? null,  // bool: landed in first 1000-1500ft
+      touchdownZoneHit: flightRecord.touchdownZoneHit ?? null,
       maxAltitude:      flightRecord.maxAltitude       ?? null,
       maxGForce:        flightRecord.maxGForce         ?? null,
       simVersion:       flightRecord.simVersion        ?? 'MSFS 2024',
       source:           'simconnect',
     };
 
-    const response = await this._request('POST', '/api/sim-sessions', body);
+    const response = await this._request('POST', '/api/sim-sessions', body, token);
     return response.data;
   }
 
   /**
-   * Verify the current API token is valid
-   * @returns {Promise<boolean>}
-   */
-  async verifyToken() {
-    try {
-      await this._request('GET', '/api/tracker-key');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Send a heartbeat so the web app knows the tracker is running.
-   * Called periodically (every ~30 s) by main.js.
-   * Silently ignores errors — heartbeat failure must not disrupt tracking.
+   * Called periodically (~30 s) by main.js. Silently ignores errors.
    */
   async sendHeartbeat() {
-    if (!this._token) return;
+    const token = await this._getToken();
+    if (!token) return;
     try {
-      await this._request('POST', '/api/tracker/heartbeat', {});
+      await this._request('POST', '/api/tracker/heartbeat', {}, token);
     } catch {
       // intentionally silent
     }
@@ -80,7 +72,7 @@ class ApiClient {
   /**
    * Internal HTTP request helper (uses native https/http modules, no axios)
    */
-  _request(method, path, body) {
+  _request(method, path, body, token) {
     return new Promise((resolve, reject) => {
       const url = new URL(this._baseUrl + path);
       const isHttps = url.protocol === 'https:';
@@ -88,17 +80,22 @@ class ApiClient {
 
       const bodyStr = body ? JSON.stringify(body) : null;
 
+      const headers = {
+        'Content-Type':  'application/json',
+        'Accept':        'application/json',
+        'User-Agent':    'SimCrewOps-Tracker/1.0',
+      };
+
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const options = {
         hostname: url.hostname,
         port:     url.port || (isHttps ? 443 : 80),
         path:     url.pathname + url.search,
         method,
-        headers: {
-          'Content-Type':  'application/json',
-          'Accept':        'application/json',
-          'Authorization': `Bearer ${this._token}`,
-          'User-Agent':    'SimCrewOps-Tracker/1.0',
-        },
+        headers,
       };
 
       if (bodyStr) {
