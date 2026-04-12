@@ -58,6 +58,9 @@ const VS_DESCENT_FPM        = -200;  // VS below which = descending
 const ENGINES_OFF_TIMEOUT   = 30000; // ms engines must be off before post-flight
 const DATA_INTERVAL_MS      = 10000; // Store a route point every 10 sec
 
+// AIRBORNE → CLIMB gate: once past this AGL we must be in a climb, not just ground effect
+const CLIMB_AGL_GATE_FT     = 400;
+
 // Touchdown zone detection
 const THRESHOLD_AGL_FT      = 80;   // AGL below which we record "threshold crossing"
 const TOUCHDOWN_ZONE_FT     = 1500; // max feet from threshold to count as in-zone
@@ -233,7 +236,7 @@ class FlightTracker extends EventEmitter {
         break;
 
       case PHASE.AIRBORNE:
-        if (d.vs > VS_CLIMB_FPM) {
+        if (d.vs > VS_CLIMB_FPM || (d.altAgl ?? 0) > CLIMB_AGL_GATE_FT) {
           this._setPhase(PHASE.CLIMB);
         } else if (d.onGround && !this._prevOnGround) {
           this._handleTouchdown(d);
@@ -243,7 +246,9 @@ class FlightTracker extends EventEmitter {
       case PHASE.CLIMB:
         if (d.altitude > CRUISE_ALT_FT && d.vs < VS_CLIMB_FPM && d.vs > VS_DESCENT_FPM) {
           this._setPhase(PHASE.CRUISE);
-        } else if (d.vs < VS_DESCENT_FPM && d.altitude < CRUISE_ALT_FT) {
+        } else if (d.vs < VS_DESCENT_FPM) {
+          // Descending at any altitude — either we never levelled to cruise or
+          // passed through cruise without the 1Hz sampler catching the window.
           this._setPhase(PHASE.DESCENT);
         } else if (d.onGround && !this._prevOnGround) {
           this._handleTouchdown(d);
