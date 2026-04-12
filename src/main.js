@@ -14,7 +14,7 @@ const store = new Store({
     apiUrl: 'https://simcrewops.com',
     autoConnect: true,
     minimizeToTray: true,
-    mapboxToken: '',
+    mapboxToken: (() => { try { return require('./config').mapboxToken; } catch { return ''; } })(),
     windowBounds: { width: 900, height: 680 },
     userInfo: null,
   },
