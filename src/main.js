@@ -55,9 +55,9 @@ async function getClerkToken() {
 }
 
 // ── Capture signed-in user info from the auth window ─────────────────────────
-// emitSignedOut: if false, suppresses the signed-out event/store-clear so that
-// intermediate retry attempts during Clerk hydration don't wipe a persisted session.
-async function captureAuthState(emitSignedOut = true) {
+// emitOnFailure: when false, a missing session is silent (used during retries
+// so the renderer does NOT see repeated "Signed out" events while Clerk boots).
+async function captureAuthState(emitOnFailure = true) {
   if (!authWindow || authWindow.isDestroyed()) return;
   try {
     const result = await authWindow.webContents.executeJavaScript(`
@@ -85,9 +85,8 @@ async function captureAuthState(emitSignedOut = true) {
       // Fire a heartbeat immediately so the live map comes online without
       // waiting up to 30 s for the next scheduled interval tick.
       if (apiClient) apiClient.sendHeartbeat(lastFlightData);
-    } else if (emitSignedOut) {
-      // Only clear the persisted session and notify the renderer on the final
-      // retry attempt — intermediate misses are normal while Clerk hydrates.
+    } else if (emitOnFailure) {
+      // Only emit signed-out once — not on every silent retry attempt.
       authState = { isSignedIn: false, user: null };
       store.set('userInfo', null);
       sendToRenderer('auth:stateChanged', authState);
@@ -139,16 +138,16 @@ async function createAuthWindow() {
 
   // Retry capturing auth state after load — Clerk needs a moment to bootstrap
   // its session from cookies/localStorage before window.Clerk.session is ready.
-  // Only emit the signed-out event on the final attempt so intermediate misses
-  // don't wipe a valid persisted session before Clerk has finished hydrating.
+  // Retries are SILENT (emitOnFailure=false) so the renderer never sees repeated
+  // "Signed out" events. Only the final attempt emits a signed-out if needed.
   authWindow.webContents.on('did-finish-load', () => {
     let attempts = 0;
     const maxAttempts = 10;
     const tryCapture = async () => {
       attempts++;
-      const isFinal = attempts >= maxAttempts;
-      await captureAuthState(isFinal);
-      if (!authState.isSignedIn && !isFinal) {
+      const isLast = attempts >= maxAttempts;
+      await captureAuthState(isLast);   // emit signed-out only on last attempt
+      if (!authState.isSignedIn && !isLast) {
         setTimeout(tryCapture, 500);
       }
     };
@@ -305,6 +304,14 @@ function setupSimConnectListeners() {
 
   simManager.on('error', (err) => {
     sendToRenderer('simconnect:status', { state: 'error', message: err.message });
+    // Log the raw (unfriendified) error to the event log so the user can see
+    // the actual failure reason (wrong path, ECONNREFUSED, permission, etc.).
+    if (err.rawMessage && err.rawMessage !== err.message) {
+      sendToRenderer('flight:event', {
+        type:    'error',
+        message: `SimConnect: ${err.rawMessage}`,
+      });
+    }
     updateTrayMenu('error');
   });
 
