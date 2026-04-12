@@ -166,36 +166,11 @@ async function createAuthWindow() {
   await authWindow.loadURL(webAppUrl).catch(() => {});
 }
 
-// ── Create tray icon programmatically ─────────────────────────────────────────
-function createTrayIcon(status = 'idle') {
-  const colors = {
-    idle:        '#64748b',
-    connecting:  '#f59e0b',
-    connected:   '#10b981',
-    tracking:    '#3b82f6',
-    error:       '#ef4444',
-  };
-  const color = colors[status] || colors.idle;
-
-  const { createCanvas } = (() => {
-    try { return require('canvas'); } catch { return null; }
-  })() || {};
-
-  if (createCanvas) {
-    const canvas = createCanvas(16, 16);
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, 16, 16);
-    ctx.beginPath();
-    ctx.arc(8, 8, 7, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    return nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
-  }
-
-  return nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAA' +
-    'JklEQVQ4jWNgYGD4z8BQDwAAAP//AwBDAAEA8P8AAAD//wMAQwABAPD/AAAAA=='
-  );
+// ── Tray icon (real logo, 16×16) ──────────────────────────────────────────────
+function createTrayIcon() {
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  const img = nativeImage.createFromPath(iconPath);
+  return img.isEmpty() ? nativeImage.createEmpty() : img.resize({ width: 16, height: 16 });
 }
 
 // ── Create main window ────────────────────────────────────────────────────────
@@ -217,7 +192,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
     },
-    icon: path.join(__dirname, '..', 'assets', 'icon.png'),
+    icon: path.join(__dirname, 'assets', 'icon.png'),
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -249,7 +224,7 @@ function createWindow() {
 
 // ── Create system tray ────────────────────────────────────────────────────────
 function createTray() {
-  const icon = createTrayIcon('idle');
+  const icon = createTrayIcon();
   tray = new Tray(icon);
   tray.setToolTip('SimCrewOps Tracker');
 
@@ -286,9 +261,6 @@ function updateTrayMenu(status) {
     },
   ]);
   tray.setContextMenu(menu);
-
-  const icon = createTrayIcon(status);
-  tray.setImage(icon);
 }
 
 // ── SimConnect connection management ──────────────────────────────────────────

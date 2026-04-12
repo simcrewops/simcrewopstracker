@@ -37,6 +37,7 @@
       "src/**/*"
     ],
     "win": {
+      "icon": "src/assets/icon.png",
       "target": [
         {
           "target": "nsis",
@@ -46,7 +47,8 @@
     },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "icon": "src/assets/icon.png"
     },
     "nsis": {
       "oneClick": true,
