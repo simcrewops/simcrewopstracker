@@ -41,7 +41,7 @@ jobs:
       - name: Upload .exe to simcrewopstracker release
         shell: python
         env:
-          GH_TOKEN: ${{ secrets.TRACKER_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           import os, glob, json, urllib.request, urllib.parse
