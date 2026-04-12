@@ -400,7 +400,7 @@ body.is-mac #titlebar          { padding-left: 72px; }
 .data-item {
   text-align: center;
   padding: 8px 4px;
-  background: rgba(255,255,255,0.02);
+  background: rgba(255,255,255,0.05);
   border-radius: 8px;
 }
 
@@ -684,6 +684,52 @@ body.is-mac #titlebar          { padding-left: 72px; }
 .legend-dot  { width: 7px; height: 7px; border-radius: 50%; }
 .legend-dot.you   { background: #22ff66; box-shadow: 0 0 5px rgba(34,255,102,0.7); }
 .legend-dot.route { background: var(--orange); }
+
+/* ── Bottom Tab Bar (ACARS | Live Map) ─────────────────────────────────────── */
+#bottom-tab-bar {
+  display: flex;
+  background: #0d1220;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.btab {
+  flex: 1;
+  padding: 7px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 0.3px;
+  transition: var(--transition);
+  -webkit-app-region: no-drag;
+}
+.btab:hover        { color: var(--text-secondary); }
+.btab.active       { color: var(--orange); border-bottom-color: var(--orange); }
+
+.btab-pane         { display: none; flex-shrink: 0; }
+.btab-pane.active  { display: block; }
+
+.btab-section-label { padding: 10px 14px 0; }
+
+#acars-log {
+  padding: 6px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Live Map panel — map fills the pane */
+#btab-map #map-wrapper {
+  position: relative;
+  height: 260px;
+  border-top: none;
+  border-bottom: none;
+}
 
 /* ── Status Bar ────────────────────────────────────────────────────────────── */
 #status-bar {

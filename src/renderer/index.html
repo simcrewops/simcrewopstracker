@@ -25,7 +25,6 @@
         <span id="conn-label">Disconnected</span>
       </div>
       <button class="title-action-btn" id="btn-connect" title="Connect to MSFS">⚡</button>
-      <button class="title-action-btn" id="btn-toggle-tracking" title="Start/Stop Tracking" disabled>&#9654;</button>
       <button class="title-action-btn" id="btn-settings" title="Settings">&#9881;</button>
       <div id="titlebar-controls">
         <button class="title-btn" id="btn-minimize" title="Minimize">&#x2212;</button>
@@ -228,12 +227,28 @@
 
   </div><!-- /content -->
 
-  <!-- ── Map (collapsed by default, toggled via button) ─────────────────────── -->
-  <div id="map-wrapper" style="display:none">
-    <div id="map"></div>
-    <div class="map-legend">
-      <div class="legend-item"><div class="legend-dot you"></div><span>You</span></div>
-      <div class="legend-item"><div class="legend-dot route"></div><span>Route</span></div>
+  <!-- ── Bottom Tab Bar (ACARS | Live Map) ────────────────────────────────── -->
+  <div id="bottom-tab-bar">
+    <button class="btab active" data-btab="acars">✉ ACARS</button>
+    <button class="btab" data-btab="map">⊞ Live Map</button>
+  </div>
+
+  <!-- ── ACARS Panel ──────────────────────────────────────────────────────── -->
+  <div id="btab-acars" class="btab-pane active">
+    <div class="card-label btab-section-label">ACARS</div>
+    <div id="acars-log">
+      <div class="event-placeholder">No messages — connect to SimCrewOps to receive ACARS messages.</div>
+    </div>
+  </div>
+
+  <!-- ── Live Map Panel ────────────────────────────────────────────────────── -->
+  <div id="btab-map" class="btab-pane">
+    <div id="map-wrapper">
+      <div id="map"></div>
+      <div class="map-legend">
+        <div class="legend-item"><div class="legend-dot you"></div><span>You</span></div>
+        <div class="legend-item"><div class="legend-dot route"></div><span>Route</span></div>
+      </div>
     </div>
   </div>
 

@@ -35,6 +35,8 @@ let isQuitting = false;
 let heartbeatInterval = null;
 let lastFlightData = null;   // kept current for live-map heartbeat payloads
 let _simStartCheckDone = false; // true after first data frame is inspected for mid-flight resume
+let lastDataAt = 0;
+let dataWatchdog = null;
 
 // ── Auth state ────────────────────────────────────────────────────────────────
 let authState = {
@@ -302,9 +304,17 @@ function setupSimConnectListeners() {
     // Don't start the tracker yet — wait for the first data frame so we can
     // detect a mid-flight restart before committing to PRE_FLIGHT.
     _simStartCheckDone = false;
+    lastDataAt = Date.now();
+    dataWatchdog = setInterval(() => {
+      if (Date.now() - lastDataAt > 10_000) {
+        console.warn('[Tracker] No SimConnect data for 10s — sim may be paused or frozen');
+        sendToRenderer('simconnect:status', { state: 'stalled' });
+      }
+    }, 10_000);
   });
 
   simManager.on('disconnected', () => {
+    if (dataWatchdog) { clearInterval(dataWatchdog); dataWatchdog = null; }
     lastFlightData = null;
     _simStartCheckDone = false;
     sendToRenderer('simconnect:status', { state: 'disconnected' });
@@ -330,8 +340,13 @@ function setupSimConnectListeners() {
         flightTracker.start();
       }
     }
+    lastDataAt = Date.now();
     lastFlightData = flightData;
-    flightTracker.update(flightData);
+    try {
+      flightTracker.update(flightData);
+    } catch (err) {
+      console.error('[Tracker] flightTracker.update() threw:', err);
+    }
     sendToRenderer('flight:data', flightData);
   });
 
