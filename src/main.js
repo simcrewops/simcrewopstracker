@@ -199,7 +199,9 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     if (store.get('autoConnect') && simManager) {
-      setTimeout(() => attemptSimConnect(), 1000);
+      // 3-second delay gives MSFS 2024 time to finish loading SimConnect
+      // before the first open() attempt (1s was too short).
+      setTimeout(() => attemptSimConnect(), 3000);
     }
   });
 
