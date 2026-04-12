@@ -33,13 +33,15 @@
     "directories": {
       "output": "dist"
     },
+    "icon": "assets/icon.png",
     "publish": {
       "provider": "github",
       "owner": "simcrewops",
       "repo": "simcrewopstracker"
     },
     "files": [
-      "src/**/*"
+      "src/**/*",
+      "assets/**/*"
     ],
     "win": {
       "target": [
