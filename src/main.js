@@ -4,9 +4,6 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = 
 const path = require('path');
 const Store = require('electron-store');
 
-// Allow requiring native modules packaged with app
-app.allowRendererProcessReuse = true;
-
 // ── Persistent settings store ─────────────────────────────────────────────────
 const store = new Store({
   name: 'simcrewops-tracker',
@@ -126,11 +123,14 @@ async function createAuthWindow() {
 
   // When the user finishes signing in, Clerk redirects to the dashboard.
   // We detect that, capture the session, then hide the window.
+  // Pass emitSignedOut=false: on the navigate event Clerk may not be fully
+  // initialised yet, so a failed capture should not wipe the persisted session.
+  // The did-finish-load retry loop owns the final signed-out decision.
   authWindow.webContents.on('did-navigate', async (_, url) => {
     const isAuthPage = url.includes('/sign-in') || url.includes('/sign-up') ||
                        url.includes('/login')   || url.includes('/register');
     if (!isAuthPage) {
-      await captureAuthState();
+      await captureAuthState(false);
       if (authState.isSignedIn && authWindow && !authWindow.isDestroyed()) {
         authWindow.hide();
       }
@@ -397,7 +397,7 @@ function _buildScoringInput(record) {
       approachSpeed:      record.approach?.approachSpeed      ?? null,
     },
     landing: {
-      touchdownVs:        record.touchdownVs        ?? 0,
+      touchdownVs:        record.landingRate         ?? 0,
       touchdownGForce:    record.touchdownGForce    ?? 0,
       touchdownPitch:     record.touchdownPitch     ?? 0,
       bounces:            record.bounceCount        ?? record.bounces ?? 0,

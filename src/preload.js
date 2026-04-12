@@ -18,7 +18,6 @@ contextBridge.exposeInMainWorld('tracker', {
 
   // ── API ──
   submitFlight:  (record)    => ipcRenderer.invoke('api:submitFlight', record),
-  verifyToken:   ()          => ipcRenderer.invoke('api:verifyToken'),
 
   // ── Auth ──
   signIn:        ()  => ipcRenderer.invoke('auth:signIn'),
