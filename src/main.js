@@ -367,48 +367,74 @@ function setupSimConnectListeners() {
 function _buildScoringInput(record) {
   return {
     preFlight: {
-      lightsChecked:   record.preFlight?.lightsChecked   ?? false,
-      parkingBrakeSet: record.preFlight?.parkingBrakeSet ?? false,
+      beaconOnBeforeTaxi: record.preFlight?.beaconOnBeforeTaxi ?? false,
     },
+
     taxiOut: {
-      maxTaxiSpeed:    record.taxiOut?.maxTaxiSpeed    ?? 0,
-      lightCompliance: record.taxiOut?.lightCompliance ?? 1.0,
+      maxSpeed:       record.taxiOut?.maxSpeed       ?? 0,
+      turnViolations: record.taxiOut?.turnViolations ?? 0,
+      lightFraction:  record.taxiOut?.lightFraction  ?? 1.0,
     },
+
     takeoff: {
-      vr:                  record.takeoff?.vr                  ?? null,
-      actualRotateSpeed:   record.takeoff?.rotateSpeed         ?? null,
-      bankAngleViolations: record.takeoff?.bankAngleViolations ?? 0,
+      vr:              record.takeoff?.vr              ?? null,
+      rotateSpeed:     record.takeoff?.rotateSpeed     ?? null,
+      landingLightsOn: record.takeoff?.landingLightsOn ?? false,
+      bankViolations:  record.takeoff?.bankViolations  ?? 0,
+      pitchViolations: record.takeoff?.pitchViolations ?? 0,
     },
+
     climb: {
       speedViolationsBelow10k: record.climb?.speedViolationsBelow10k ?? 0,
-      lightCompliance:         record.climb?.lightCompliance         ?? 1.0,
+      bankViolations:          record.climb?.bankViolations          ?? 0,
+      maxGForce:               record.climb?.maxGForce               ?? 0,
+      strobeCompliance:        record.climb?.strobeCompliance        ?? 1.0,
+      landingLightsViolation:  record.climb?.landingLightsViolation  ?? false,
     },
+
     cruise: {
-      maxMach:          record.cruise?.maxMach    ?? 0,
-      autopilotEngaged: record.cruise?.autopilotUsed ?? false,
+      altViolations:  record.cruise?.altViolations  ?? 0,
+      machRms:        record.cruise?.machRms        ?? 0,
+      bankViolations: record.cruise?.bankViolations ?? 0,
+      maxGForce:      record.cruise?.maxGForce      ?? 0,
     },
+
     descent: {
       speedViolationsBelow10k: record.descent?.speedViolationsBelow10k ?? 0,
+      bankViolations:          record.descent?.bankViolations          ?? 0,
+      pitchViolations:         record.descent?.pitchViolations         ?? 0,
+      maxGForce:               record.descent?.maxGForce               ?? 0,
     },
+
     approach: {
-      stabilizedAt1000ft: record.approach?.stabilizedAt1000ft ?? false,
+      gearDownBy1000:     record.approach?.gearDownBy1000     ?? false,
+      flapsSetBy1000:     record.approach?.flapsSetBy1000     ?? false,
+      stabilisedBelow500: record.approach?.stabilisedBelow500 ?? false,
       gsDeviationRms:     record.approach?.gsDeviationRms     ?? 0,
       vapp:               record.approach?.vapp               ?? null,
-      approachSpeed:      record.approach?.approachSpeed      ?? null,
+      avgApproachSpeed:   record.approach?.avgApproachSpeed   ?? null,
     },
+
     landing: {
-      touchdownVs:        record.landingRate         ?? 0,
-      touchdownGForce:    record.touchdownGForce    ?? 0,
-      touchdownPitch:     record.touchdownPitch     ?? 0,
-      bounces:            record.bounceCount        ?? record.bounces ?? 0,
-      tailStrike:         record.tailStrike         ?? false,
-      touchdownZoneHit:   record.touchdownZoneHit   ?? false,
-      centerlineDeviation: record.centerlineDeviation ?? 0,
+      touchdownVs:      record.landingRate      ?? 0,
+      touchdownGForce:  record.touchdownGForce  ?? 0,
+      touchdownPitch:   record.touchdownPitch   ?? 0,
+      bounces:          record.bounces          ?? 0,
+      tailStrike:       record.tailStrike       ?? false,
+      touchdownZoneHit: record.touchdownZoneHit ?? false,
     },
+
+    taxiIn: {
+      maxSpeed:          record.taxiIn?.maxSpeed          ?? 0,
+      turnViolations:    record.taxiIn?.turnViolations    ?? 0,
+      lightFraction:     record.taxiIn?.lightFraction     ?? 1.0,
+      landingLightsOff:  record.taxiIn?.landingLightsOff  ?? false,
+      strobesOff:        record.taxiIn?.strobesOff        ?? false,
+    },
+
     postFlight: {
-      taxiInMaxSpeed: record.taxiIn?.maxTaxiSpeed ?? 0,
-      enginesOff:     record.enginesOff           ?? false,
-      fuelUsed:       record.fuelUsed             ?? 0,
+      enginesOff: true, // reaching _completeFlight() means engines are off
+      fuelUsed:   record.fuelUsed ?? 0,
     },
   };
 }
