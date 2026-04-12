@@ -90,6 +90,21 @@ class ApiClient {
   }
 
   /**
+   * Fetch the user's next scheduled flight from /api/flights/next.
+   * Returns null if no upcoming flight exists or the user is not signed in.
+   */
+  async getNextFlight() {
+    const token = await this._getToken();
+    if (!token) return null;
+    try {
+      const response = await this._request('GET', '/api/flights/next', null, token);
+      return response.data ?? response ?? null;
+    } catch {
+      return null; // no upcoming flight or endpoint unavailable — stay silent
+    }
+  }
+
+  /**
    * Internal HTTP request helper (uses native https/http modules, no axios)
    */
   _request(method, path, body, token) {

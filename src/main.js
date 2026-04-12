@@ -87,6 +87,8 @@ async function captureAuthState() {
       // Fire a heartbeat immediately so the live map comes online without
       // waiting up to 30 s for the next scheduled interval tick.
       if (apiClient) apiClient.sendHeartbeat(lastFlightData);
+      // Populate the flight card with the user's next scheduled flight.
+      fetchAndSendNextFlight();
     } else {
       authState = { isSignedIn: false, user: null };
       store.set('userInfo', null);
@@ -299,6 +301,16 @@ function attemptSimConnect() {
   simManager.connect();
 }
 
+async function fetchAndSendNextFlight() {
+  if (!apiClient || !authState.isSignedIn) return;
+  try {
+    const flight = await apiClient.getNextFlight();
+    if (flight) sendToRenderer('flight:briefing', flight);
+  } catch (err) {
+    console.warn('[Tracker] Failed to fetch next flight briefing:', err.message);
+  }
+}
+
 function setupSimConnectListeners() {
   simManager.on('connected', (info) => {
     sendToRenderer('simconnect:status', { state: 'connected', info });
@@ -504,6 +516,17 @@ function registerIpcHandlers() {
     try {
       const result = await apiClient.submitFlight(flightRecord);
       return { success: true, data: result };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('api:getNextFlight', async () => {
+    if (!apiClient) return { success: false, error: 'API client not initialized' };
+    if (!authState.isSignedIn) return { success: false, data: null };
+    try {
+      const flight = await apiClient.getNextFlight();
+      return { success: true, data: flight };
     } catch (err) {
       return { success: false, error: err.message };
     }

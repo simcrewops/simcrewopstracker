@@ -387,6 +387,52 @@ function updateMetrics(d) {
   updateMap(d);
 }
 
+// ── Next flight briefing ───────────────────────────────────────────────────
+function applyFlightBriefing(flight) {
+  if (!flight) return;
+  // Only populate when idle — don't overwrite an in-progress flight
+  if (state.phase && state.phase !== 'idle') return;
+
+  const setText = (id, val) => { const el = $(id); if (el && val) el.textContent = val; };
+
+  // Flight number and airline prefix
+  const fn = flight.flightNumber || flight.flight_number || flight.callsign || '';
+  if (fn) {
+    setText('flight-num', fn);
+    // Extract airline code: first 2-3 alpha chars before any digit
+    const match = fn.match(/^([A-Z]{2,3})\d/);
+    if (match) setText('airline-badge', match[1]);
+  }
+
+  // Airports
+  const dep = flight.departure || flight.departureIcao || flight.origin || '';
+  const arr = flight.arrival   || flight.arrivalIcao   || flight.destination || '';
+  setText('dep-icao',  dep.toUpperCase());
+  setText('arr-icao',  arr.toUpperCase());
+
+  // Aircraft
+  const ac = flight.aircraft || flight.aircraftType || flight.aircraft_type || '';
+  setText('aircraft-tag', ac);
+
+  // Phase badge → "Scheduled"
+  const badge = $('phase-badge');
+  if (badge) {
+    badge.textContent = 'Scheduled';
+    badge.style.background = 'rgba(59,130,246,0.15)';
+    badge.style.color      = '#60a5fa';
+    badge.style.border     = '1px solid rgba(59,130,246,0.3)';
+  }
+
+  // Show scheduled departure time in the timer field
+  const depTime = flight.scheduledDeparture || flight.scheduled_departure || flight.departureTime || '';
+  if (depTime) {
+    const d = new Date(depTime);
+    if (!isNaN(d)) {
+      setText('flight-timer', `STD ${d.toUTCString().slice(17, 22)}Z`);
+    }
+  }
+}
+
 // ── Auth state UI ──────────────────────────────────────────────────────────
 function applyAuthState(auth) {
   const signedIn  = $('auth-signed-in');
@@ -599,11 +645,19 @@ window.tracker.on('api:submit', ({ success, error }) => {
   }
 });
 
+window.tracker.on('flight:briefing', (flight) => {
+  applyFlightBriefing(flight);
+});
+
 window.tracker.on('auth:stateChanged', (auth) => {
   applyAuthState(auth);
   if (auth.isSignedIn && auth.user) {
     const name = auth.user.name || auth.user.email || 'user';
     addEvent('info', `Signed in as ${name}`);
+    // Fetch next scheduled flight now that we have a session
+    window.tracker.getNextFlight().then(({ data }) => {
+      if (data) applyFlightBriefing(data);
+    }).catch(() => {});
   } else {
     addEvent('info', 'Signed out of SimCrewOps');
   }
@@ -695,6 +749,13 @@ async function init() {
     // Apply initial auth state
     if (appState.auth) {
       applyAuthState(appState.auth);
+    }
+
+    // Pre-populate the flight card with the next scheduled flight (if signed in)
+    if (appState.auth && appState.auth.isSignedIn) {
+      window.tracker.getNextFlight().then(({ data }) => {
+        if (data) applyFlightBriefing(data);
+      }).catch(() => {});
     }
 
     // Version

@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('tracker', {
   // ── API ──
   submitFlight:  (record)    => ipcRenderer.invoke('api:submitFlight', record),
   verifyToken:   ()          => ipcRenderer.invoke('api:verifyToken'),
+  getNextFlight: ()          => ipcRenderer.invoke('api:getNextFlight'),
 
   // ── Auth ──
   signIn:        ()  => ipcRenderer.invoke('auth:signIn'),
@@ -45,6 +46,7 @@ contextBridge.exposeInMainWorld('tracker', {
       'flight:phase',
       'flight:event',
       'flight:complete',
+      'flight:briefing',
       'api:submit',
       'auth:stateChanged',
     ];
