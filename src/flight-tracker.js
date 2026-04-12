@@ -7,27 +7,34 @@
  *  - phase changes
  *  - takeoff event (airport, time, IAS)
  *  - landing event (airport, landing rate in fpm, G-force, touchdownZoneHit)
- *  - flightComplete event (full flight record with air time, ground time, touchdown zone)
+ *  - flightComplete event (full flight record with air time, block time, etc.)
  *
- * Time tracking:
- *  - Block time OUT: engines first start on ground (TAXI phase entry)
- *  - Wheels up: aircraft lifts off (TAKEOFF_ROLL → AIRBORNE)
- *  - Wheels down: touchdown (onGround transitions to true)
- *  - Block time IN: engines shut down (POST_FLIGHT → engines off timeout)
+ * ── Block time ────────────────────────────────────────────────────────────────
+ *  Blocks OFF: PARKING BRAKE INDICATOR drops 1→0, AND GROUND VELOCITY exceeds
+ *              0.5 kt within the following 30 seconds.  Timestamped at brake
+ *              release (not at movement detection) as blocksOffTime.
  *
- *  Air time   = wheelsDown - wheelsUp (hours)
- *  Ground time = (wheelsUp - blockOut) + (blockIn - wheelsDown) (hours)
+ *  Blocks ON:  After a landing has been recorded, aircraft is on the ground,
+ *              GROUND VELOCITY < 0.5 kt, AND PARKING BRAKE INDICATOR = 1.
+ *              Timestamped as blocksOnTime.
  *
- * Touchdown zone detection:
- *  - During APPROACH, when AGL drops below THRESHOLD_AGL_FT, record position
- *    as the threshold crossing point.
- *  - At touchdown, compute haversine distance from threshold crossing to touchdown.
- *  - If distance ≤ TOUCHDOWN_ZONE_FT feet (~460m), mark touchdownZoneHit = true.
- *    Touchdown zone = first 1000–1500 ft past the threshold markers.
+ *  Block time for pay = blocksOnTime − blocksOffTime (decimal hours).
  *
- * Flight phase state machine:
+ *  Engine start is tracked separately as engineStartTime (ENG COMBUSTION:1
+ *  transitions 0→1) and stored on the flight record, but is NOT used as the
+ *  block time trigger.
+ *
+ *  Both blocksOffTime and engineStartTime survive a SimConnect
+ *  disconnect/reconnect — stop() does not reset them.
+ *
+ * ── Phase state machine ───────────────────────────────────────────────────────
  *   IDLE → PRE_FLIGHT → TAXI → TAKEOFF_ROLL → AIRBORNE → CLIMB
  *        → CRUISE → DESCENT → APPROACH → LANDING → POST_FLIGHT → IDLE
+ *
+ * ── Touchdown zone detection ──────────────────────────────────────────────────
+ *  During APPROACH, when AGL drops below THRESHOLD_AGL_FT, record position as
+ *  the threshold crossing.  At touchdown, compute haversine distance; if ≤
+ *  TOUCHDOWN_ZONE_FT mark touchdownZoneHit = true.
  */
 
 const { EventEmitter } = require('events');
@@ -49,27 +56,28 @@ const PHASE = {
 };
 
 // ── Thresholds ────────────────────────────────────────────────────────────────
-const TAKEOFF_IAS_KT        = 60;   // IAS above which we call it airborne on rollout
-const LANDING_GS_KT         = 10;   // GS below which we consider fully stopped after landing
-const CRUISE_ALT_FT         = 10000; // Altitude above which we call it cruise
-const APPROACH_ALT_FT       = 5000;  // Altitude below which (descending) we call it approach
-const VS_CLIMB_FPM          = 200;   // VS above which = climbing
-const VS_DESCENT_FPM        = -200;  // VS below which = descending
-const ENGINES_OFF_TIMEOUT   = 30000; // ms engines must be off before post-flight
-const DATA_INTERVAL_MS      = 10000; // Store a route point every 10 sec
+const TAKEOFF_IAS_KT        = 60;    // GS above which takeoff roll is declared
+const LANDING_GS_KT         = 10;    // GS below which we consider fully stopped
+const CRUISE_ALT_FT         = 10000; // Alt above which (level) = cruise
+const APPROACH_ALT_FT       = 5000;  // Alt below which (descending) = approach
+const VS_CLIMB_FPM          = 200;
+const VS_DESCENT_FPM        = -200;
+const ENGINES_OFF_TIMEOUT   = 30000; // ms engines must be off → complete flight
+const DATA_INTERVAL_MS      = 10000; // route point every 10 s
 
-// AIRBORNE → CLIMB gate: once past this AGL we must be in a climb, not just ground effect
-const CLIMB_AGL_GATE_FT     = 400;
+const CLIMB_AGL_GATE_FT     = 400;   // AGL above which we leave AIRBORNE→CLIMB
 
-// Touchdown zone detection
-const THRESHOLD_AGL_FT      = 80;   // AGL below which we record "threshold crossing"
-const TOUCHDOWN_ZONE_FT     = 1500; // max feet from threshold to count as in-zone
+// Touchdown zone
+const THRESHOLD_AGL_FT      = 80;
+const TOUCHDOWN_ZONE_FT     = 1500;
 
-/**
- * Haversine distance between two lat/lon points, returned in feet.
- */
+// Block time
+const BLOCKS_OFF_WINDOW_MS  = 30000; // PB release → movement must happen within 30 s
+const BLOCKS_ON_GS_KT       = 0.5;  // ground speed threshold for blocks-on
+const BLOCKS_OFF_GS_KT      = 0.5;  // ground speed threshold confirming blocks-off
+
 function haversineDistanceFt(lat1, lon1, lat2, lon2) {
-  const R   = 20902231; // Earth radius in feet
+  const R   = 20902231;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a   = Math.sin(dLat / 2) ** 2
@@ -89,34 +97,42 @@ class FlightTracker extends EventEmitter {
     this._prevOnGround  = true;
     this._enginesOffAt  = null;
 
-    // Flight record being built
-    this._flightRecord  = null;
-    this._routePoints   = [];
-    this._lastRouteAt   = 0;
-    this._maxAlt        = 0;
-    this._maxGForce     = 0;
-    this._fuelAtStart   = null;
-    this._fuelAtEnd     = null;
-    this._departureIcao = null;
-    this._arrivalIcao   = null;
+    // Flight record fields
+    this._flightRecord   = null;
+    this._routePoints    = [];
+    this._lastRouteAt    = 0;
+    this._maxAlt         = 0;
+    this._maxGForce      = 0;
+    this._fuelAtStart    = null;
+    this._fuelAtEnd      = null;
+    this._departureIcao  = null;
+    this._arrivalIcao    = null;
 
-    // Detailed time tracking
-    this._blockOutTime  = null; // ms timestamp — engines start on ground
-    this._wheelsUpTime  = null; // ms timestamp — liftoff
-    this._wheelsDownTime = null; // ms timestamp — touchdown
-    this._blockInTime   = null; // ms timestamp — engines off after landing
+    // Time tracking
+    this._blockOutTime   = null; // ms — parking brake release + movement confirmed
+    this._blocksOnTime   = null; // ms — parking brake set at dest + stopped, after landing
+    this._wheelsUpTime   = null; // ms — liftoff
+    this._wheelsDownTime = null; // ms — touchdown
 
-    this._resumedMidFlight = false; // true when tracker started mid-flight on restart
+    // Engine start (separate from block time, tracked for the flight record)
+    this._engineStartTime = null; // ms — first ENG COMBUSTION:1 0→1 transition
+    this._prevEng1        = false;
 
-    // Touchdown zone detection
+    // Parking-brake block-time tracking
+    this._prevParkingBrake        = true;  // assume set at startup
+    this._parkingBrakeReleasedAt  = null;  // ms — when PB was released (window start)
+
+    this._resumedMidFlight = false;
+
+    // Touchdown zone
     this._touchdownVs          = 0;
-    this._thresholdCrossedPos  = null; // { lat, lon } when AGL < THRESHOLD_AGL_FT in approach
-    this._touchdownPos         = null; // { lat, lon } at touchdown
+    this._thresholdCrossedPos  = null;
+    this._touchdownPos         = null;
     this._touchdownZoneHit     = false;
 
     // Bounce detection
-    this._bounces          = [];       // [{ timestamp, airTimeMs }]
-    this._lastLiftoffTime  = null;     // ms timestamp of last liftoff (for bounce window)
+    this._bounces          = [];
+    this._lastLiftoffTime  = null;
 
     // Tail strike & touchdown details
     this._tailStrike           = false;
@@ -138,6 +154,8 @@ class FlightTracker extends EventEmitter {
   }
 
   stop() {
+    // Intentionally does NOT reset the flight record — block times and
+    // in-progress state must survive a SimConnect disconnect/reconnect.
     this._active = false;
     this._setPhase(PHASE.IDLE);
   }
@@ -153,16 +171,11 @@ class FlightTracker extends EventEmitter {
     this._resetFlightRecord();
   }
 
-  /**
-   * Called on startup when the sim is already airborne (mid-flight restart).
-   * Skips ground phases, seeds fuel from the current reading, and emits a
-   * notice so the UI can inform the user that pre-departure stats are missing.
-   */
   resumeMidFlight(data) {
-    this._active          = true;
+    this._active           = true;
     this._resumedMidFlight = true;
-    this._fuelAtStart     = data.fuelGallons;
-    this._wheelsUpTime    = Date.now(); // best approximation — actual liftoff was before restart
+    this._fuelAtStart      = data.fuelLbs;
+    this._wheelsUpTime     = Date.now();
 
     let targetPhase;
     if (data.vs > VS_CLIMB_FPM) {
@@ -179,21 +192,63 @@ class FlightTracker extends EventEmitter {
 
   update(data) {
     if (!this._active) return;
+
+    // Skip full tracking logic during core-only warmup — engine and brake data
+    // aren't available yet, and running the state machine on defaults would
+    // produce incorrect phase transitions.
+    if (data.coreOnly) {
+      this._lastData = data;
+      return;
+    }
+
     this._lastData = data;
 
     if (data.altitude > this._maxAlt) this._maxAlt = data.altitude;
     if (data.gForce > this._maxGForce) this._maxGForce = data.gForce;
-    if (this._fuelAtStart === null) this._fuelAtStart = data.fuelGallons;
+    if (this._fuelAtStart === null && data.fuelLbs !== null) {
+      this._fuelAtStart = data.fuelLbs;
+    }
 
     const now = Date.now();
     if (now - this._lastRouteAt > DATA_INTERVAL_MS) {
       this._routePoints.push({ lat: data.lat, lon: data.lon, alt: data.altitude, ts: now });
       this._lastRouteAt = now;
-      // Cap at ~6 hours of data (10s interval × 2160 = 6 h) to bound memory
       if (this._routePoints.length > 2160) this._routePoints.shift();
     }
 
-    // Touchdown zone: track threshold crossing during approach
+    // ── Engine start tracking ────────────────────────────────────────────────
+    // Record the first time ENG COMBUSTION:1 transitions 0 → 1.
+    if (!this._engineStartTime && !this._prevEng1 && data.eng1) {
+      this._engineStartTime = now;
+    }
+    this._prevEng1 = data.eng1;
+
+    // ── Blocks-off tracking ──────────────────────────────────────────────────
+    // Step 1: detect parking brake 1→0 transition
+    if (this._prevParkingBrake && !data.parkingBrake && !this._parkingBrakeReleasedAt && !this._blockOutTime) {
+      this._parkingBrakeReleasedAt = now;
+    }
+    // Step 2: confirm movement within 30-second window
+    if (this._parkingBrakeReleasedAt && !this._blockOutTime) {
+      if (data.groundSpeed > BLOCKS_OFF_GS_KT) {
+        // Blocks-off time = the moment the brake was released, not movement onset
+        this._blockOutTime = this._parkingBrakeReleasedAt;
+        this._parkingBrakeReleasedAt = null;
+      } else if (now - this._parkingBrakeReleasedAt > BLOCKS_OFF_WINDOW_MS) {
+        // No movement within 30 s — discard (e.g., brief accidental release)
+        this._parkingBrakeReleasedAt = null;
+      }
+    }
+    this._prevParkingBrake = data.parkingBrake;
+
+    // ── Blocks-on tracking ───────────────────────────────────────────────────
+    // Only after a landing has been recorded (wheelsDownTime set).
+    if (!this._blocksOnTime && this._wheelsDownTime &&
+        data.onGround && data.groundSpeed < BLOCKS_ON_GS_KT && data.parkingBrake) {
+      this._blocksOnTime = now;
+    }
+
+    // ── Touchdown zone threshold crossing ───────────────────────────────────
     if (this._phase === PHASE.APPROACH && !data.onGround) {
       const agl = data.altAgl ?? 999;
       if (agl < THRESHOLD_AGL_FT && this._thresholdCrossedPos === null) {
@@ -201,30 +256,29 @@ class FlightTracker extends EventEmitter {
       }
     }
 
-    // Bounce detection: track liftoff/touchdown transitions after initial takeoff
+    // ── Bounce detection ────────────────────────────────────────────────────
     if (!data.onGround && this._prevOnGround && this._wheelsUpTime !== null) {
-      // Re-airborne after a previous takeoff — could be a bounce
-      this._lastLiftoffTime = Date.now();
+      this._lastLiftoffTime = now;
     }
     if (data.onGround && !this._prevOnGround && this._lastLiftoffTime !== null) {
-      const timeAirborne = Date.now() - this._lastLiftoffTime;
+      const timeAirborne = now - this._lastLiftoffTime;
       if (timeAirborne < 3000) {
-        this._bounces.push({ timestamp: Date.now(), airTimeMs: timeAirborne });
+        this._bounces.push({ timestamp: now, airTimeMs: timeAirborne });
       }
       this._lastLiftoffTime = null;
     }
 
-    // Tail strike detection: pitch > 12° while on the ground
+    // ── Tail strike ──────────────────────────────────────────────────────────
     if (data.onGround && data.pitch !== undefined && data.pitch > 12 && !this._tailStrike) {
       this._tailStrike = true;
-      this._tailStrikeTimestamp = Date.now();
+      this._tailStrikeTimestamp = now;
     }
 
     this._runStateMachine(data);
     this._prevOnGround = data.onGround;
   }
 
-  // ── State machine ─────────────────────────────────────────────────────────
+  // ── State machine ──────────────────────────────────────────────────────────
   _runStateMachine(d) {
     const enginesOn = d.eng1 || d.eng2;
 
@@ -234,10 +288,10 @@ class FlightTracker extends EventEmitter {
 
       case PHASE.PRE_FLIGHT:
         if (enginesOn && d.onGround) {
-          this._blockOutTime = Date.now();
-          this._fuelAtStart  = d.fuelGallons;
+          this._fuelAtStart = d.fuelLbs;
+          // keepBlockOut=true preserves any PB-based blocksOffTime already set;
+          // also preserves engineStartTime recorded in update() above.
           this._resetFlightRecord(/* keepBlockOut= */ true);
-          // Must assign AFTER _resetFlightRecord() because that method clears _departureIcao
           this._departureIcao = this._airports.nearest(d.lat, d.lon);
           this._setPhase(PHASE.TAXI);
         }
@@ -273,8 +327,6 @@ class FlightTracker extends EventEmitter {
         if (d.altitude > CRUISE_ALT_FT && d.vs < VS_CLIMB_FPM && d.vs > VS_DESCENT_FPM) {
           this._setPhase(PHASE.CRUISE);
         } else if (d.vs < VS_DESCENT_FPM) {
-          // Descending at any altitude — either we never levelled to cruise or
-          // passed through cruise without the 1Hz sampler catching the window.
           this._setPhase(PHASE.DESCENT);
         } else if (d.onGround && !this._prevOnGround) {
           this._handleTouchdown(d);
@@ -301,7 +353,6 @@ class FlightTracker extends EventEmitter {
         if (d.onGround && !this._prevOnGround) {
           this._handleTouchdown(d);
         } else if (d.vs > VS_CLIMB_FPM) {
-          // Go-around — reset threshold crossing
           this._thresholdCrossedPos = null;
           this._setPhase(PHASE.CLIMB);
         }
@@ -318,7 +369,6 @@ class FlightTracker extends EventEmitter {
           if (!this._enginesOffAt) {
             this._enginesOffAt = Date.now();
           } else if (Date.now() - this._enginesOffAt > ENGINES_OFF_TIMEOUT) {
-            this._blockInTime = Date.now();
             this._completeFlight(d);
             this._setPhase(PHASE.PRE_FLIGHT);
             this._enginesOffAt = null;
@@ -334,18 +384,16 @@ class FlightTracker extends EventEmitter {
     this._touchdownVs    = d.vs;
     this._wheelsDownTime = Date.now();
     this._arrivalIcao    = this._airports.nearest(d.lat, d.lon);
-    this._fuelAtEnd      = d.fuelGallons;
+    this._fuelAtEnd      = d.fuelLbs;
     this._touchdownPos   = { lat: d.lat, lon: d.lon };
     this._touchdownPitch  = d.pitch  ?? 0;
     this._touchdownGForce = d.gForce ?? 0;
 
-    // Tail strike: also catch high pitch exactly at touchdown
     if (d.pitch !== undefined && d.pitch > 12 && !this._tailStrike) {
       this._tailStrike = true;
       this._tailStrikeTimestamp = Date.now();
     }
 
-    // Determine touchdown zone hit
     if (this._thresholdCrossedPos) {
       const distFt = haversineDistanceFt(
         this._thresholdCrossedPos.lat, this._thresholdCrossedPos.lon,
@@ -353,10 +401,6 @@ class FlightTracker extends EventEmitter {
       );
       this._touchdownZoneHit = distFt <= TOUCHDOWN_ZONE_FT;
     } else {
-      // No threshold crossing recorded (e.g., visual approach at high AGL)
-      // Fall back: if AGL at touchdown area was very low at threshold we estimate
-      // Using VS as proxy: typical TZ approach has specific descent profile
-      // Without data, conservatively mark as unknown (false)
       this._touchdownZoneHit = false;
     }
 
@@ -372,7 +416,7 @@ class FlightTracker extends EventEmitter {
   }
 
   _completeFlight(d) {
-    if (!this._wheelsUpTime) return; // No takeoff recorded
+    if (!this._wheelsUpTime) return;
 
     const now = Date.now();
 
@@ -382,17 +426,22 @@ class FlightTracker extends EventEmitter {
     const airTimeMin   = Math.round(airTimeMs / 60000);
     const airTimeHours = airTimeMin / 60;
 
-    // Ground time: block out → wheels up  +  wheels down → block in (engines off)
-    const blockOut     = this._blockOutTime ?? (this._wheelsUpTime - 15 * 60000); // fallback: 15min taxi
-    const blockIn      = this._blockInTime  ?? (wheelsDown + 10 * 60000);         // fallback: 10min taxi
-    const groundTimeMs = (this._wheelsUpTime - blockOut) + (blockIn - wheelsDown);
-    const groundTimeMin  = Math.max(0, Math.round(groundTimeMs / 60000));
+    // Block time: blocks-off → blocks-on (parking-brake-based).
+    // Fallback to engine-era estimates only if PB timestamps unavailable.
+    const blockOut      = this._blockOutTime  ?? (this._wheelsUpTime - 15 * 60000);
+    const blockIn       = this._blocksOnTime  ?? (wheelsDown + 10 * 60000);
+    const blockTimeMs   = blockIn - blockOut;
+    const blockTimeMin  = Math.max(0, Math.round(blockTimeMs / 60000));
+    const blockTimeHours = blockTimeMin / 60;
+
+    // Ground time = block time − air time
+    const groundTimeMs    = Math.max(0, blockTimeMs - airTimeMs);
+    const groundTimeMin   = Math.round(groundTimeMs / 60000);
     const groundTimeHours = groundTimeMin / 60;
 
-    const durationMin = airTimeMin; // report air time as "duration" for UI
-
-    const fuelUsed = this._fuelAtStart !== null && this._fuelAtEnd !== null
-      ? Math.round((this._fuelAtStart - this._fuelAtEnd) * 10) / 10
+    // Fuel used in pounds (FUEL TOTAL QUANTITY WEIGHT SimVar)
+    const fuelUsedLbs = this._fuelAtStart !== null && this._fuelAtEnd !== null
+      ? Math.round(this._fuelAtStart - this._fuelAtEnd)
       : null;
 
     const record = {
@@ -401,9 +450,16 @@ class FlightTracker extends EventEmitter {
       departure:        this._departureIcao,
       arrival:          this._arrivalIcao,
       resumedMidFlight: this._resumedMidFlight,
-      duration:         durationMin,          // air time in minutes
-      airTime:          airTimeHours,         // hours
-      groundTime:       groundTimeHours,      // hours
+      duration:         airTimeMin,
+      airTime:          airTimeHours,
+      groundTime:       groundTimeHours,
+      blockTime:        blockTimeHours,
+      // Raw timestamps (ms since epoch) for server-side calculation
+      blocksOffTime:    this._blockOutTime  ?? null,
+      blocksOnTime:     this._blocksOnTime  ?? null,
+      engineStartTime:  this._engineStartTime ?? null,
+      wheelsUpTime:     this._wheelsUpTime,
+      wheelsDownTime:   this._wheelsDownTime,
       landingRate:      Math.round(this._touchdownVs),
       touchdownZoneHit: this._touchdownZoneHit,
       touchdownPitch:   this._touchdownPitch,
@@ -413,7 +469,8 @@ class FlightTracker extends EventEmitter {
       tailStrike:       this._tailStrike,
       maxAltitude:      this._maxAlt,
       maxGForce:        Math.round(this._maxGForce * 100) / 100,
-      fuelUsed,
+      fuelUsed:     fuelUsedLbs,   // pounds
+      fuelUsedLbs,                 // alias — explicit unit
       routePoints:      this._routePoints,
       simVersion:       'MSFS 2020/2024',
       source:           'simconnect',
@@ -432,36 +489,45 @@ class FlightTracker extends EventEmitter {
   }
 
   /**
-   * @param {boolean} keepBlockOut - if true, preserve _blockOutTime through reset
+   * Reset all per-flight state.
+   *
+   * @param {boolean} keepBlockOut - When true, preserve _blockOutTime and
+   *   _engineStartTime across the reset.  Used when the state machine re-enters
+   *   PRE_FLIGHT (e.g. engines restart) so block-out recorded at PB release
+   *   is not lost.
    */
   _resetFlightRecord(keepBlockOut = false) {
-    const savedBlockOut = keepBlockOut ? this._blockOutTime : null;
+    const savedBlockOut    = keepBlockOut ? this._blockOutTime    : null;
+    const savedEngStart    = keepBlockOut ? this._engineStartTime : null;
 
-    this._resumedMidFlight   = false;
-    this._flightRecord       = null;
-    this._routePoints        = [];
-    this._lastRouteAt        = 0;
-    this._maxAlt             = 0;
-    this._maxGForce          = 0;
-    this._fuelAtStart        = null;
-    this._fuelAtEnd          = null;
-    this._departureIcao      = null;
-    this._arrivalIcao        = null;
-    this._touchdownVs        = 0;
-    this._wheelsUpTime       = null;
-    this._wheelsDownTime     = null;
-    this._blockInTime        = null;
+    this._resumedMidFlight    = false;
+    this._flightRecord        = null;
+    this._routePoints         = [];
+    this._lastRouteAt         = 0;
+    this._maxAlt              = 0;
+    this._maxGForce           = 0;
+    this._fuelAtStart         = null;
+    this._fuelAtEnd           = null;
+    this._departureIcao       = null;
+    this._arrivalIcao         = null;
+    this._touchdownVs         = 0;
+    this._wheelsUpTime        = null;
+    this._wheelsDownTime      = null;
+    this._blocksOnTime        = null;
     this._thresholdCrossedPos = null;
-    this._touchdownPos       = null;
-    this._touchdownZoneHit   = false;
-    this._touchdownPitch     = 0;
-    this._touchdownGForce    = 0;
-    this._bounces            = [];
-    this._lastLiftoffTime    = null;
-    this._tailStrike         = false;
+    this._touchdownPos        = null;
+    this._touchdownZoneHit    = false;
+    this._touchdownPitch      = 0;
+    this._touchdownGForce     = 0;
+    this._bounces             = [];
+    this._lastLiftoffTime     = null;
+    this._tailStrike          = false;
     this._tailStrikeTimestamp = null;
+    this._parkingBrakeReleasedAt = null;
 
-    this._blockOutTime = savedBlockOut;
+    // Restore preserved values (or clear on full stop)
+    this._blockOutTime    = savedBlockOut;
+    this._engineStartTime = savedEngStart;
   }
 
   _setPhase(phase) {
@@ -470,7 +536,6 @@ class FlightTracker extends EventEmitter {
     this._phase = phase;
     this.emit('phase', { phase, prev });
 
-    // High-frequency polling: enable near landing, disable once clear
     if (phase === PHASE.APPROACH) {
       this.emit('highFreq', { enabled: true });
     } else if (phase === PHASE.POST_FLIGHT || phase === PHASE.TAXI) {

@@ -361,7 +361,7 @@ function updateMetrics(d) {
   if (elGs)   elGs.textContent   = String(Math.round(d.groundSpeed));
 
   const elFuel = $('d-fuel');
-  if (elFuel) elFuel.textContent = Math.round(d.fuelGallons).toLocaleString();
+  if (elFuel) elFuel.textContent = d.fuelLbs != null ? Math.round(d.fuelLbs).toLocaleString() : '—';
 
   const elGf   = $('d-gforce');
   if (elGf) {
