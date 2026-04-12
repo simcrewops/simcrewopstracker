@@ -38,13 +38,14 @@ const CORE_CONFIRM_MS   = 1000; // ms to wait for stability before Phase 2
 
 // ── Core SimVars (Phase 1) ────────────────────────────────────────────────────
 // Minimal safe set — sufficient for live nav display and phase detection.
-// 'PLANE ALT ABOVE GROUND LEVEL' (not 'PLANE ALT ABOVE GROUND') is the correct
-// MSFS 2024 name; the shorter alias is rejected by some sim builds.
+// 'PLANE ALT ABOVE GROUND' (shorter form) is used here — confirmed working in
+// MSFS 2024 as of v1.0.21. The longer 'PLANE ALT ABOVE GROUND LEVEL' alias
+// was rejected by some sim builds.
 const CORE_VARS = [
-  ['PLANE LATITUDE',               'degrees'],
-  ['PLANE LONGITUDE',              'degrees'],
-  ['PLANE ALTITUDE',               'feet'],
-  ['PLANE ALT ABOVE GROUND LEVEL', 'feet'],
+  ['PLANE LATITUDE',          'degrees'],
+  ['PLANE LONGITUDE',         'degrees'],
+  ['PLANE ALTITUDE',          'feet'],
+  ['PLANE ALT ABOVE GROUND',  'feet'],
   ['PLANE HEADING DEGREES TRUE',   'degrees'],
   ['AIRSPEED INDICATED',           'knots'],
   ['GROUND VELOCITY',              'knots'],
@@ -110,24 +111,10 @@ class SimConnectManager extends EventEmitter {
       const { open, Protocol, SimConnectDataType, SimConnectPeriod } = nodeSimConnect;
       this._SimConnectPeriod = SimConnectPeriod;
 
-      // Try KittyHawk (MSFS 2020 / MSFS 2024) first, then FSX_SP2 as a fallback.
-      // MSFS 2024 added support alongside KittyHawk but some configs need FSX_SP2.
-      // Connect via TCP (IPv4) to bypass Microsoft Store named-pipe sandboxing.
-      // MSFS 2024 Store edition blocks named-pipe connections from non-Store apps;
-      // TCP on port 500 works for both Store and Steam installs provided the
-      // SimConnect.cfg written at startup enables the IPv4 listener in the sim.
-      const tcpOpts = { host: '127.0.0.1', port: 500 };
-      let recvOpen, handle, _lastProtoErr;
-      for (const protocol of [Protocol.KittyHawk, Protocol.FSX_SP2]) {
-        try {
-          ({ recvOpen, handle } = await open('SimCrewOps Tracker', protocol, tcpOpts));
-          break;
-        } catch (e) {
-          _lastProtoErr = e;
-          console.warn(`[SimConnect] Protocol ${protocol} (TCP) failed: ${e.message}`);
-        }
-      }
-      if (!handle) throw _lastProtoErr;
+      // Connect via named-pipe using KittyHawk protocol (MSFS 2020 + 2024).
+      // This matches the v1.0.21 call signature that is confirmed working.
+      // Named-pipe is the default SimConnect transport; no host/port needed.
+      const { recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.KittyHawk);
       this._handle         = handle;
       this._connected      = true;
       this._reconnecting   = false;
