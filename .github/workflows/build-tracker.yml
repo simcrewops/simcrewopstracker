@@ -26,6 +26,13 @@ jobs:
         env:
           npm_config_arch: x64
 
+      - name: Write build config
+        shell: bash
+        env:
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
+        run: |
+          echo "'use strict'; module.exports = { mapboxToken: '${MAPBOX_TOKEN}' };" > src/config.js
+
       - name: Build Windows installer
         run: npm run build:win -- --publish never
         env:
@@ -40,7 +47,7 @@ jobs:
           import os, glob, json, urllib.request, urllib.parse
 
           token = os.environ['GH_TOKEN']
-          # Strip "tracker-" prefix: tracker-v1.0.27 -> v1.0.27
+          # Strip "tracker-" prefix: tracker-v1.0.29 -> v1.0.29
           tag = os.environ['TAG_NAME'].replace('tracker-', '', 1)
           repo = 'simcrewops/simcrewopstracker'
 
@@ -99,7 +106,7 @@ jobs:
           upload_req = urllib.request.Request(
               upload_url,
               data=data,
-              headers={**headers, 'Content-Type': 'application/octet-stream'},
+              headers={**headers, 'Content-Type': 'application/json', 'Content-Type': 'application/octet-stream'},
               method='POST'
           )
           with urllib.request.urlopen(upload_req) as resp:
