@@ -288,11 +288,11 @@ function writeSimConnectCfg() {
   const appData      = process.env.APPDATA      || path.join(os.homedir(), 'AppData', 'Roaming');
 
   const cfgPaths = [
-    // MSFS 2024 — Microsoft Store (Store sandbox, confirmed install type)
-    path.join(localAppData, 'Packages', 'Microsoft.Limitless_8wekyb3d8bbwe', 'LocalCache', 'SimConnect.cfg'),
-    // MSFS 2024 — Steam
+    // MSFS 2024 — Xbox Game Pass / Store roaming config (primary, confirmed)
     path.join(appData, 'Microsoft Flight Simulator 2024', 'SimConnect.cfg'),
-    // MSFS 2020 — Steam (fallback for users on 2020)
+    // MSFS 2024 — Store package LocalCache fallback
+    path.join(localAppData, 'Packages', 'Microsoft.Limitless_8wekyb3d8bbwe', 'LocalCache', 'SimConnect.cfg'),
+    // MSFS 2020 fallback
     path.join(appData, 'Microsoft Flight Simulator', 'SimConnect.cfg'),
   ];
 
@@ -316,10 +316,9 @@ function writeSimConnectCfg() {
 // the SimConnect attempt. Store sandboxing or renamed binaries may hide the
 // process from tasklist even when the sim is running.
 const MSFS_EXE_NAMES = [
-  'flightsimulator.exe',           // MSFS 2020 Store + Steam; MSFS 2024 Steam
-  'microsoft.flightsimulator.exe', // some MSFS 2024 Store builds
-  'fs2024.exe',
-  'limitless.exe',
+  'flightsimulator2024.exe',       // MSFS 2024 Xbox Game Pass / Store (confirmed)
+  'flightsimulator.exe',           // MSFS 2020 Store + Steam; possibly MSFS 2024 Steam
+  'microsoft.flightsimulator.exe', // fallback for some Store builds
 ];
 
 function isMsfsRunning() {
