@@ -21,7 +21,6 @@ let mapReady    = false;  // true after map 'load' event fires
 const $ = (id) => document.getElementById(id);
 
 const btnConnect        = $('btn-connect');
-const btnToggleTracking = $('btn-toggle-tracking'); // may be null before index.html is fully synced
 const depIcao           = $('dep-icao');
 const arrIcao           = $('arr-icao');
 const flightTimer       = $('flight-timer');
@@ -627,38 +626,24 @@ btnConnect.addEventListener('click', () => {
   }
 });
 
-if (btnToggleTracking) {
-  btnToggleTracking.addEventListener('click', () => {
-    if (!window.tracker) return;
-    if (state.tracking) {
-      state.tracking = false;
-      btnToggleTracking.innerHTML = '&#9654; Start Tracking';
-      window.tracker.stopTracking();
-      addEvent('info', 'Tracking stopped manually');
-    } else {
-      state.tracking = true;
-      btnToggleTracking.innerHTML = '&#9646;&#9646; Stop Tracking';
-      window.tracker.startTracking();
-      addEvent('info', 'Tracking started');
-    }
-  });
-}
-
-// ── Map toggle ─────────────────────────────────────────────────────────────
+// ── Bottom tabs (ACARS | Live Map) ────────────────────────────────────────
 (function () {
-  const btnMapToggle = $('btn-map-toggle');
-  const mapWrapper   = $('map-wrapper');
-  if (!btnMapToggle || !mapWrapper) return;
+  const tabs  = document.querySelectorAll('.btab');
+  const panes = document.querySelectorAll('.btab-pane');
 
-  btnMapToggle.addEventListener('click', () => {
-    const visible = mapWrapper.style.display !== 'none';
-    mapWrapper.style.display = visible ? 'none' : 'block';
-    btnMapToggle.classList.toggle('active', !visible);
-    // Mapbox needs an explicit size recalculation after becoming visible
-    if (!visible && mbMap) {
-      setTimeout(() => mbMap.resize(), 50);
-    }
-  });
+  function switchBtab(name) {
+    tabs.forEach(t  => t.classList.toggle('active', t.dataset.btab === name));
+    panes.forEach(p => p.classList.toggle('active', p.id === 'btab-' + name));
+    if (name === 'map' && mbMap) setTimeout(() => mbMap.resize(), 50);
+  }
+
+  tabs.forEach(tab => tab.addEventListener('click', () => switchBtab(tab.dataset.btab)));
+
+  // Status-bar map button now jumps to the Live Map tab
+  const btnMapToggle = $('btn-map-toggle');
+  if (btnMapToggle) {
+    btnMapToggle.addEventListener('click', () => switchBtab('map'));
+  }
 })();
 
 $('btn-settings').addEventListener('click', openSettings);
@@ -690,10 +675,6 @@ if (btnDismissDebrief) {
 
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) closeSettings();
-});
-
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
 });
 
 // Window controls (Electron only)
