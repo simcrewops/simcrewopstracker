@@ -173,11 +173,14 @@ class SimConnectManager extends EventEmitter {
       this._connected = false;
       this._handle    = null;
       const rawMsg    = err?.message ?? String(err);
+      // Always log the raw code + message so the actual failure reason is
+      // visible in Electron's console/DevTools regardless of _friendlyError mapping.
+      console.error('[SimConnect] Raw error:', err?.code ?? '', rawMsg);
       const msg       = this._friendlyError(err);
       const emitErr   = new Error(msg);
       emitErr.rawMessage = rawMsg;   // preserve original for event-log visibility
       this.emit('error', emitErr);
-      console.error('[SimConnect] Connection failed:', rawMsg);
+      console.error('[SimConnect] Connection failed:', msg);
 
       // Schedule reconnect
       if (!this._stopReconnect) {
@@ -286,13 +289,24 @@ class SimConnectManager extends EventEmitter {
 
   _friendlyError(err) {
     const msg = err?.message ?? String(err);
-    if (msg.includes('ECONNREFUSED') || msg.includes('connect')) {
+    const code = err?.code ?? '';
+    if (code === 'ECONNREFUSED' || msg.includes('ECONNREFUSED') || msg.includes('connect ECONNREFUSED')) {
       return 'MSFS is not running or SimConnect is unavailable. Please start Microsoft Flight Simulator first.';
+    }
+    if (code === 'ENOENT' || msg.includes('ENOENT')) {
+      return 'SimConnect DLL not found. Ensure MSFS 2024 is fully installed (check %LocalAppData%\\Packages\\Microsoft.Limitless_*\\LocalCache\\SimConnect.cfg).';
+    }
+    if (code === 'ETIMEDOUT' || msg.includes('ETIMEDOUT') || msg.includes('timed out')) {
+      return 'SimConnect connection timed out. MSFS may still be loading — will retry automatically.';
+    }
+    if (code === 'ENOTSUP' || msg.includes('ENOTSUP') || msg.includes('not supported')) {
+      return 'SimConnect handshake rejected. Ensure MSFS 2024 is running (not MSFS 2020) and the sim is fully loaded to the main menu.';
     }
     if (msg.includes('not found') || msg.includes('MODULE_NOT_FOUND')) {
       return 'SimConnect library not found. Please run on Windows with MSFS installed.';
     }
-    return msg;
+    // Unknown error — include raw message so it appears in the UI status panel.
+    return `SimConnect error (${code || 'unknown'}): ${msg}`;
   }
 }
 
