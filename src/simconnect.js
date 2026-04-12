@@ -66,8 +66,19 @@ class SimConnectManager extends EventEmitter {
       // Store for use by setHighFreqMode()
       this._SimConnectPeriod = SimConnectPeriod;
 
-      // Try MSFS 2024 (FSX_SP2) first, fall back to FSX_SP2 which covers 2020 too
-      const { recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.KittyHawk);
+      // Try KittyHawk (MSFS 2020 / MSFS 2024) first, then FSX_SP2 as a fallback.
+      // MSFS 2024 added support alongside KittyHawk but some configs need FSX_SP2.
+      let recvOpen, handle, _lastProtoErr;
+      for (const protocol of [Protocol.KittyHawk, Protocol.FSX_SP2]) {
+        try {
+          ({ recvOpen, handle } = await open('SimCrewOps Tracker', protocol));
+          break;
+        } catch (e) {
+          _lastProtoErr = e;
+          console.warn(`[SimConnect] Protocol ${protocol} failed: ${e.message}`);
+        }
+      }
+      if (!handle) throw _lastProtoErr;
       this._handle = handle;
       this._connected = true;
       this._reconnecting = false;
@@ -161,9 +172,12 @@ class SimConnectManager extends EventEmitter {
     } catch (err) {
       this._connected = false;
       this._handle    = null;
-      const msg = this._friendlyError(err);
-      this.emit('error', new Error(msg));
-      console.error('[SimConnect] Connection failed:', msg);
+      const rawMsg    = err?.message ?? String(err);
+      const msg       = this._friendlyError(err);
+      const emitErr   = new Error(msg);
+      emitErr.rawMessage = rawMsg;   // preserve original for event-log visibility
+      this.emit('error', emitErr);
+      console.error('[SimConnect] Connection failed:', rawMsg);
 
       // Schedule reconnect
       if (!this._stopReconnect) {
