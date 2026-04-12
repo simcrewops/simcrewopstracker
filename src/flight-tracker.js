@@ -419,9 +419,9 @@ class FlightTracker extends EventEmitter {
     if (phase === PHASE.APPROACH) {
       const agl = d.altAgl ?? 9999;
 
-      // Accumulate GS deviation and speed samples
+      // Accumulate GS deviation and speed samples (airborne frames only)
       this._approachGsSamples.push(d.gsDeviation ?? 0);
-      if (agl < 2000) this._approachSpeedSamples.push(d.ias);
+      if (agl < 2000 && !d.onGround) this._approachSpeedSamples.push(d.ias);
 
       // Gate check at 1000 AGL (one-time)
       if (!this._checkedAt1000 && agl <= GEAR_DOWN_AGL_FT) {
