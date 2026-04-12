@@ -13,8 +13,9 @@
 
 const { EventEmitter } = require('events');
 
-// SimConnect data definition ID
-const DEF_ID = 0;
+// SimConnect data definition IDs
+const DEF_ID        = 0; // main periodic data
+const DEF_ID_STRING = 1; // one-shot string data (ATC TYPE)
 // SimConnect request IDs
 const REQ_ID_PERIODIC = 0;
 const REQ_ID_ONCE     = 1;
@@ -92,6 +93,19 @@ class SimConnectManager extends EventEmitter {
       handle.addToDataDefinition(DEF_ID, 'G FORCE',                     'gforce',           d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'AUTOPILOT MASTER',            'bool',             d.FLOAT64);
       handle.addToDataDefinition(DEF_ID, 'PLANE PITCH DEGREES',         'degrees',          d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PLANE BANK DEGREES',          'degrees',          d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'AIRSPEED MACH',               'mach',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'NAV GLIDE SLOPE ERROR',       'degrees',          d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT BEACON',                'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT NAV',                   'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT STROBE',                'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT LANDING',               'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'LIGHT TAXI',                  'bool',             d.FLOAT64);
+      handle.addToDataDefinition(DEF_ID, 'PARKING BRAKE INDICATOR',     'bool',             d.FLOAT64);
+
+      // One-shot string request for aircraft type
+      handle.addToDataDefinition(DEF_ID_STRING, 'ATC TYPE', null, d.STRING256);
+      handle.requestDataOnSimObject(REQ_ID_ONCE, DEF_ID_STRING, 0, SimConnectPeriod.ONCE, 0, 0, 0, 0);
 
       // Request data every sim second (SECOND period)
       handle.requestDataOnSimObject(
@@ -107,6 +121,15 @@ class SimConnectManager extends EventEmitter {
 
       // ── Event handlers ────────────────────────────────────────────────────
       handle.on('simObjectData', (recv) => {
+        if (recv.requestID === REQ_ID_ONCE) {
+          try {
+            const typeCode = recv.data.readString256().replace(/\0/g, '').trim();
+            if (typeCode) this.emit('aircraftType', typeCode);
+          } catch (e) {
+            console.warn('[SimConnect] Failed to read ATC TYPE:', e.message);
+          }
+          return;
+        }
         if (recv.requestID !== REQ_ID_PERIODIC && recv.requestID !== REQ_ID_HIGHFREQ) return;
         const data = this._parseSimData(recv.data);
         if (data) {
@@ -174,6 +197,15 @@ class SimConnectManager extends EventEmitter {
         gForce:      Math.round(buf.readFloat64() * 100) / 100,
         autopilot:   buf.readFloat64() > 0.5,
         pitch:       Math.round(buf.readFloat64() * 10) / 10,  // degrees, positive = nose up
+        bankAngle:   Math.round(buf.readFloat64() * 10) / 10,
+        mach:        Math.round(buf.readFloat64() * 1000) / 1000,
+        gsDeviation: Math.round(buf.readFloat64() * 100) / 100,
+        lightBeacon: buf.readFloat64() > 0.5,
+        lightNav:    buf.readFloat64() > 0.5,
+        lightStrobe: buf.readFloat64() > 0.5,
+        lightLanding: buf.readFloat64() > 0.5,
+        lightTaxi:   buf.readFloat64() > 0.5,
+        parkingBrake: buf.readFloat64() > 0.5,
         timestamp:   Date.now(),
       };
     } catch (err) {

@@ -120,6 +120,7 @@ class FlightTracker extends EventEmitter {
     this._touchdownGForce      = 0;
 
     this._airports = new Airports();
+    this._aircraftTypeCode = null;
   }
 
   isTracking() {
@@ -390,8 +391,12 @@ class FlightTracker extends EventEmitter {
     this._resetFlightRecord();
   }
 
+  setAircraftType(typeCode) {
+    this._aircraftTypeCode = typeCode ? typeCode.trim() : null;
+  }
+
   _detectAircraftType() {
-    return 'UNKN';
+    return this._aircraftTypeCode ?? 'UNKN';
   }
 
   /**

@@ -56,6 +56,7 @@ class ApiClient {
       routePoints:       flightRecord.routePoints        ?? [],
       simVersion:        flightRecord.simVersion         ?? 'MSFS 2024',
       source:            'simconnect',
+      scoringInput:      flightRecord.scoringInput       ?? null,
     };
 
     const response = await this._request('POST', '/api/sim-sessions', body, token);

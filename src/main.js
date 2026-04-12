@@ -302,6 +302,61 @@ function setupSimConnectListeners() {
     flightTracker.update(flightData);
     sendToRenderer('flight:data', flightData);
   });
+
+  simManager.on('aircraftType', (typeCode) => {
+    if (flightTracker && typeof flightTracker.setAircraftType === 'function') {
+      flightTracker.setAircraftType(typeCode);
+    }
+  });
+}
+
+function _buildScoringInput(record) {
+  return {
+    preFlight: {
+      lightsChecked:   record.preFlight?.lightsChecked   ?? false,
+      parkingBrakeSet: record.preFlight?.parkingBrakeSet ?? false,
+    },
+    taxiOut: {
+      maxTaxiSpeed:    record.taxiOut?.maxTaxiSpeed    ?? 0,
+      lightCompliance: record.taxiOut?.lightCompliance ?? 1.0,
+    },
+    takeoff: {
+      vr:                  record.takeoff?.vr                  ?? null,
+      actualRotateSpeed:   record.takeoff?.rotateSpeed         ?? null,
+      bankAngleViolations: record.takeoff?.bankAngleViolations ?? 0,
+    },
+    climb: {
+      speedViolationsBelow10k: record.climb?.speedViolationsBelow10k ?? 0,
+      lightCompliance:         record.climb?.lightCompliance         ?? 1.0,
+    },
+    cruise: {
+      maxMach:          record.cruise?.maxMach    ?? 0,
+      autopilotEngaged: record.cruise?.autopilotUsed ?? false,
+    },
+    descent: {
+      speedViolationsBelow10k: record.descent?.speedViolationsBelow10k ?? 0,
+    },
+    approach: {
+      stabilizedAt1000ft: record.approach?.stabilizedAt1000ft ?? false,
+      gsDeviationRms:     record.approach?.gsDeviationRms     ?? 0,
+      vapp:               record.approach?.vapp               ?? null,
+      approachSpeed:      record.approach?.approachSpeed      ?? null,
+    },
+    landing: {
+      touchdownVs:        record.touchdownVs        ?? 0,
+      touchdownGForce:    record.touchdownGForce    ?? 0,
+      touchdownPitch:     record.touchdownPitch     ?? 0,
+      bounces:            record.bounceCount        ?? record.bounces ?? 0,
+      tailStrike:         record.tailStrike         ?? false,
+      touchdownZoneHit:   record.touchdownZoneHit   ?? false,
+      centerlineDeviation: record.centerlineDeviation ?? 0,
+    },
+    postFlight: {
+      taxiInMaxSpeed: record.taxiIn?.maxTaxiSpeed ?? 0,
+      enginesOff:     record.enginesOff           ?? false,
+      fuelUsed:       record.fuelUsed             ?? 0,
+    },
+  };
 }
 
 function setupFlightTrackerListeners() {
@@ -321,6 +376,7 @@ function setupFlightTrackerListeners() {
   });
 
   flightTracker.on('flightComplete', async (flightRecord) => {
+    flightRecord.scoringInput = _buildScoringInput(flightRecord);
     sendToRenderer('flight:complete', flightRecord);
     updateTrayMenu('connected');
 
