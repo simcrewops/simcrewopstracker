@@ -9,9 +9,32 @@
  *  - landing event (airport, landing rate in fpm, G-force, touchdownZoneHit)
  *  - flightComplete event (full flight record with scoring subfields)
  *
- * Flight phase state machine:
+ * ── Block time ────────────────────────────────────────────────────────────────
+ *  Blocks OFF: PARKING BRAKE INDICATOR drops 1→0, AND GROUND VELOCITY exceeds
+ *              0.5 kt within the following 30 seconds.  Timestamped at brake
+ *              release (not at movement detection) as blocksOffTime.
+ *
+ *  Blocks ON:  After a landing has been recorded, aircraft is on the ground,
+ *              GROUND VELOCITY < 0.5 kt, AND PARKING BRAKE INDICATOR = 1.
+ *              Timestamped as blocksOnTime.
+ *
+ *  Block time for pay = blocksOnTime − blocksOffTime (decimal hours).
+ *
+ *  Engine start is tracked separately as engineStartTime (ENG COMBUSTION:1
+ *  transitions 0→1) and stored on the flight record, but is NOT used as the
+ *  block time trigger.
+ *
+ *  Both blocksOffTime and engineStartTime survive a SimConnect
+ *  disconnect/reconnect — stop() does not reset them.
+ *
+ * ── Phase state machine ───────────────────────────────────────────────────────
  *   IDLE → PRE_FLIGHT → TAXI → TAKEOFF_ROLL → AIRBORNE → CLIMB
  *        → CRUISE → DESCENT → APPROACH → LANDING → POST_FLIGHT → IDLE
+ *
+ * ── Touchdown zone detection ──────────────────────────────────────────────────
+ *  During APPROACH, when AGL drops below THRESHOLD_AGL_FT, record position as
+ *  the threshold crossing.  At touchdown, compute haversine distance; if ≤
+ *  TOUCHDOWN_ZONE_FT mark touchdownZoneHit = true.
  */
 
 const { EventEmitter } = require('events');
@@ -68,6 +91,11 @@ const STABILISED_AGL_FT         = 500;
 const GEAR_DOWN_AGL_FT          = 1000;
 const FLAPS_SET_AGL_FT          = 1000;
 
+// Block time
+const BLOCKS_OFF_WINDOW_MS  = 30000; // PB release → movement must happen within 30 s
+const BLOCKS_ON_GS_KT       = 0.5;  // ground speed threshold for blocks-on
+const BLOCKS_OFF_GS_KT      = 0.5;  // ground speed threshold confirming blocks-off
+
 // 4-engine heavy types that get the 300kt below FL100 exception
 const HEAVY_4_ENGINE = new Set([
   'B744','B748','B74S','B74F',
@@ -81,9 +109,6 @@ function isHeavy4Engine(typeCode) {
   return HEAVY_4_ENGINE.has(typeCode.toUpperCase().trim());
 }
 
-/**
- * Haversine distance between two lat/lon points, returned in feet.
- */
 function haversineDistanceFt(lat1, lon1, lat2, lon2) {
   const R    = 20902231;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -131,10 +156,19 @@ class FlightTracker extends EventEmitter {
     this._arrivalIcao   = null;
 
     // Time tracking
-    this._blockOutTime   = null;
-    this._wheelsUpTime   = null;
-    this._wheelsDownTime = null;
+    this._blockOutTime   = null; // ms — parking brake release + movement confirmed
+    this._blocksOnTime   = null; // ms — parking brake set at dest + stopped, after landing
+    this._wheelsUpTime   = null; // ms — liftoff
+    this._wheelsDownTime = null; // ms — touchdown
     this._blockInTime    = null;
+
+    // Engine start (separate from block time, tracked for the flight record)
+    this._engineStartTime = null; // ms — first ENG COMBUSTION:1 0→1 transition
+    this._prevEng1        = false;
+
+    // Parking-brake block-time tracking
+    this._prevParkingBrake        = true;  // assume set at startup
+    this._parkingBrakeReleasedAt  = null;  // ms — when PB was released (window start)
 
     this._resumedMidFlight = false;
 
@@ -232,6 +266,8 @@ class FlightTracker extends EventEmitter {
   }
 
   stop() {
+    // Intentionally does NOT reset the flight record — block times and
+    // in-progress state must survive a SimConnect disconnect/reconnect.
     this._active = false;
     this._setPhase(PHASE.IDLE);
   }
@@ -250,7 +286,7 @@ class FlightTracker extends EventEmitter {
   resumeMidFlight(data) {
     this._active           = true;
     this._resumedMidFlight = true;
-    this._fuelAtStart      = data.fuelGallons;
+    this._fuelAtStart      = data.fuelLbs;
     this._wheelsUpTime     = Date.now();
 
     let targetPhase;
@@ -276,17 +312,60 @@ class FlightTracker extends EventEmitter {
 
   update(data) {
     if (!this._active) return;
+
+    // Skip full tracking logic during core-only warmup — engine and brake data
+    // aren't available yet, and running the state machine on defaults would
+    // produce incorrect phase transitions.
+    if (data.coreOnly) {
+      this._lastData = data;
+      return;
+    }
+
     this._lastData = data;
 
     if (data.altitude > this._maxAlt) this._maxAlt = data.altitude;
     if (data.gForce   > this._maxGForce) this._maxGForce = data.gForce;
-    if (this._fuelAtStart === null) this._fuelAtStart = data.fuelGallons;
+    if (this._fuelAtStart === null && data.fuelLbs !== null) {
+      this._fuelAtStart = data.fuelLbs;
+    }
 
     const now = Date.now();
     if (now - this._lastRouteAt > DATA_INTERVAL_MS) {
       this._routePoints.push({ lat: data.lat, lon: data.lon, alt: data.altitude, ts: now });
       this._lastRouteAt = now;
       if (this._routePoints.length > 2160) this._routePoints.shift();
+    }
+
+    // ── Engine start tracking ────────────────────────────────────────────────
+    // Record the first time ENG COMBUSTION:1 transitions 0 → 1.
+    if (!this._engineStartTime && !this._prevEng1 && data.eng1) {
+      this._engineStartTime = now;
+    }
+    this._prevEng1 = data.eng1;
+
+    // ── Blocks-off tracking ──────────────────────────────────────────────────
+    // Step 1: detect parking brake 1→0 transition
+    if (this._prevParkingBrake && !data.parkingBrake && !this._parkingBrakeReleasedAt && !this._blockOutTime) {
+      this._parkingBrakeReleasedAt = now;
+    }
+    // Step 2: confirm movement within 30-second window
+    if (this._parkingBrakeReleasedAt && !this._blockOutTime) {
+      if (data.groundSpeed > BLOCKS_OFF_GS_KT) {
+        // Blocks-off time = the moment the brake was released, not movement onset
+        this._blockOutTime = this._parkingBrakeReleasedAt;
+        this._parkingBrakeReleasedAt = null;
+      } else if (now - this._parkingBrakeReleasedAt > BLOCKS_OFF_WINDOW_MS) {
+        // No movement within 30 s — discard (e.g., brief accidental release)
+        this._parkingBrakeReleasedAt = null;
+      }
+    }
+    this._prevParkingBrake = data.parkingBrake;
+
+    // ── Blocks-on tracking ───────────────────────────────────────────────────
+    // Only after a landing has been recorded (wheelsDownTime set).
+    if (!this._blocksOnTime && this._wheelsDownTime &&
+        data.onGround && data.groundSpeed < BLOCKS_ON_GS_KT && data.parkingBrake) {
+      this._blocksOnTime = now;
     }
 
     // Touchdown zone threshold crossing
@@ -483,9 +562,10 @@ class FlightTracker extends EventEmitter {
 
       case PHASE.PRE_FLIGHT:
         if (enginesOn && d.onGround) {
-          this._blockOutTime      = Date.now();
-          this._fuelAtStart       = d.fuelGallons;
+          this._fuelAtStart = d.fuelLbs;
           this._beaconOnBeforeTaxi = d.lightBeacon === true; // must be on before rolling
+          // keepBlockOut=true preserves any PB-based blocksOffTime already set;
+          // also preserves engineStartTime recorded in update() above.
           this._resetFlightRecord(/* keepBlockOut= */ true);
           this._departureIcao = this._airports.nearest(d.lat, d.lon);
           this._setPhase(PHASE.TAXI);
@@ -584,7 +664,6 @@ class FlightTracker extends EventEmitter {
           if (!this._enginesOffAt) {
             this._enginesOffAt = Date.now();
           } else if (Date.now() - this._enginesOffAt > ENGINES_OFF_TIMEOUT) {
-            this._blockInTime = Date.now();
             this._completeFlight(d);
             this._setPhase(PHASE.PRE_FLIGHT);
             this._enginesOffAt = null;
@@ -602,7 +681,7 @@ class FlightTracker extends EventEmitter {
     this._touchdownVs     = d.vs;
     this._wheelsDownTime  = Date.now();
     this._arrivalIcao     = this._airports.nearest(d.lat, d.lon);
-    this._fuelAtEnd       = d.fuelGallons;
+    this._fuelAtEnd       = d.fuelLbs;
     this._touchdownPos    = { lat: d.lat, lon: d.lon };
     this._touchdownPitch  = d.pitch  ?? 0;
     this._touchdownGForce = d.gForce ?? 0;
@@ -643,14 +722,24 @@ class FlightTracker extends EventEmitter {
     const wheelsDown  = this._wheelsDownTime ?? now;
     const airTimeMs   = wheelsDown - this._wheelsUpTime;
     const airTimeMin  = Math.round(airTimeMs / 60000);
+    const airTimeHours = airTimeMin / 60;
 
-    const blockOut      = this._blockOutTime ?? (this._wheelsUpTime - 15 * 60000);
-    const blockIn       = this._blockInTime  ?? (wheelsDown + 10 * 60000);
-    const groundTimeMs  = (this._wheelsUpTime - blockOut) + (blockIn - wheelsDown);
-    const groundTimeMin = Math.max(0, Math.round(groundTimeMs / 60000));
+    // Block time: blocks-off → blocks-on (parking-brake-based).
+    // Fallback to engine-era estimates only if PB timestamps unavailable.
+    const blockOut      = this._blockOutTime  ?? (this._wheelsUpTime - 15 * 60000);
+    const blockIn       = this._blocksOnTime  ?? (wheelsDown + 10 * 60000);
+    const blockTimeMs   = blockIn - blockOut;
+    const blockTimeMin  = Math.max(0, Math.round(blockTimeMs / 60000));
+    const blockTimeHours = blockTimeMin / 60;
 
-    const fuelUsed = (this._fuelAtStart !== null && this._fuelAtEnd !== null)
-      ? Math.round((this._fuelAtStart - this._fuelAtEnd) * 10) / 10
+    // Ground time = block time − air time
+    const groundTimeMs    = Math.max(0, blockTimeMs - airTimeMs);
+    const groundTimeMin   = Math.round(groundTimeMs / 60000);
+    const groundTimeHours = groundTimeMin / 60;
+
+    // Fuel used in pounds (FUEL TOTAL QUANTITY WEIGHT SimVar)
+    const fuelUsedLbs = (this._fuelAtStart !== null && this._fuelAtEnd !== null)
+      ? Math.round(this._fuelAtStart - this._fuelAtEnd)
       : null;
 
     const speeds = getAircraftSpeeds(this._aircraftTypeCode);
@@ -675,8 +764,15 @@ class FlightTracker extends EventEmitter {
       arrival:          this._arrivalIcao,
       resumedMidFlight: this._resumedMidFlight,
       duration:         airTimeMin,
-      airTime:          airTimeMin / 60,
-      groundTime:       groundTimeMin / 60,
+      airTime:          airTimeHours,
+      groundTime:       groundTimeHours,
+      blockTime:        blockTimeHours,
+      // Raw timestamps (ms since epoch) for server-side calculation
+      blocksOffTime:    this._blockOutTime  ?? null,
+      blocksOnTime:     this._blocksOnTime  ?? null,
+      engineStartTime:  this._engineStartTime ?? null,
+      wheelsUpTime:     this._wheelsUpTime,
+      wheelsDownTime:   this._wheelsDownTime,
       landingRate:      Math.round(this._touchdownVs),
       touchdownZoneHit: this._touchdownZoneHit,
       touchdownPitch:   this._touchdownPitch,
@@ -686,7 +782,8 @@ class FlightTracker extends EventEmitter {
       tailStrike:       this._tailStrike,
       maxAltitude:      this._maxAlt,
       maxGForce:        Math.round(this._maxGForce * 100) / 100,
-      fuelUsed,
+      fuelUsed:     fuelUsedLbs,   // pounds
+      fuelUsedLbs,                 // alias — explicit unit
       routePoints:      this._routePoints,
       simVersion:       'MSFS 2020/2024',
       source:           'simconnect',
@@ -760,32 +857,18 @@ class FlightTracker extends EventEmitter {
     return this._aircraftTypeCode ?? 'UNKN';
   }
 
-  _setPhase(phase) {
-    if (this._phase === phase) return;
-    const prev = this._phase;
-    this._phase = phase;
-    this.emit('phase', { phase, prev });
-
-    // Record cruise entry timestamp for the 60s lock timer
-    if (phase === PHASE.CRUISE) {
-      this._cruiseEnteredAt = Date.now();
-    }
-
-    // High-frequency polling near landing
-    if (phase === PHASE.APPROACH) {
-      this.emit('highFreq', { enabled: true });
-    } else if (phase === PHASE.POST_FLIGHT || phase === PHASE.TAXI ||
-               phase === PHASE.CLIMB      || phase === PHASE.AIRBORNE ||
-               phase === PHASE.CRUISE     || phase === PHASE.DESCENT) {
-      // Disable high-freq whenever we leave the approach/landing window,
-      // including on a go-around (APPROACH → CLIMB).
-      this.emit('highFreq', { enabled: false });
-    }
-  }
-
+  /**
+   * Reset all per-flight state.
+   *
+   * @param {boolean} keepBlockOut - When true, preserve _blockOutTime and
+   *   _engineStartTime across the reset.  Used when the state machine re-enters
+   *   PRE_FLIGHT (e.g. engines restart) so block-out recorded at PB release
+   *   is not lost.
+   */
   _resetFlightRecord(keepBlockOut = false) {
-    const savedBlockOut  = keepBlockOut ? this._blockOutTime      : null;
-    const savedBeacon    = keepBlockOut ? this._beaconOnBeforeTaxi : false;
+    const savedBlockOut    = keepBlockOut ? this._blockOutTime      : null;
+    const savedEngStart    = keepBlockOut ? this._engineStartTime   : null;
+    const savedBeacon      = keepBlockOut ? this._beaconOnBeforeTaxi : false;
 
     // Core
     this._resumedMidFlight    = false;
@@ -801,6 +884,7 @@ class FlightTracker extends EventEmitter {
     this._wheelsUpTime        = null;
     this._wheelsDownTime      = null;
     this._blockInTime         = null;
+    this._blocksOnTime        = null;
     this._thresholdCrossedPos = null;
     this._touchdownPos        = null;
     this._touchdownZoneHit    = false;
@@ -810,6 +894,7 @@ class FlightTracker extends EventEmitter {
     this._lastLiftoffTime     = null;
     this._tailStrike          = false;
     this._tailStrikeTimestamp = null;
+    this._parkingBrakeReleasedAt = null;
 
     // Scoring
     this._beaconOnBeforeTaxi      = false;
@@ -857,8 +942,33 @@ class FlightTracker extends EventEmitter {
     this._taxiInFrameCount        = 0;
     this._taxiInLightOnFrames     = 0;
 
+    // Restore preserved values (or clear on full stop)
     this._blockOutTime      = savedBlockOut;
+    this._engineStartTime   = savedEngStart;
     this._beaconOnBeforeTaxi = savedBeacon;
+  }
+
+  _setPhase(phase) {
+    if (this._phase === phase) return;
+    const prev = this._phase;
+    this._phase = phase;
+    this.emit('phase', { phase, prev });
+
+    // Record cruise entry timestamp for the 60s lock timer
+    if (phase === PHASE.CRUISE) {
+      this._cruiseEnteredAt = Date.now();
+    }
+
+    // High-frequency polling near landing
+    if (phase === PHASE.APPROACH) {
+      this.emit('highFreq', { enabled: true });
+    } else if (phase === PHASE.POST_FLIGHT || phase === PHASE.TAXI ||
+               phase === PHASE.CLIMB      || phase === PHASE.AIRBORNE ||
+               phase === PHASE.CRUISE     || phase === PHASE.DESCENT) {
+      // Disable high-freq whenever we leave the approach/landing window,
+      // including on a go-around (APPROACH → CLIMB).
+      this.emit('highFreq', { enabled: false });
+    }
   }
 }
 

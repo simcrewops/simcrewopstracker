@@ -318,7 +318,10 @@ function setupSimConnectListeners() {
   });
 
   simManager.on('data', (flightData) => {
-    if (!_simStartCheckDone) {
+    // Skip the mid-flight start check while only core SimVars are registered
+    // (Phase 1 warmup — eng1/eng2 are defaulted to false and can't be trusted).
+    // The check runs on the first full data frame once Phase 2 is active.
+    if (!_simStartCheckDone && !flightData.coreOnly) {
       _simStartCheckDone = true;
       const enginesOn = flightData.eng1 || flightData.eng2;
       const airborne  = (flightData.altAgl ?? 0) > 1000 || flightData.groundSpeed > 80;

@@ -1,6 +1,9 @@
 {
   "name": "simcrewops-tracker",
-  "version": "1.0.40",
+
+
+  "version": "1.0.41",
+
   "description": "SimCrewOps Desktop Flight Tracker – connects MSFS via SimConnect and logs flights to simcrewops.com",
   "repository": {
     "type": "git",
