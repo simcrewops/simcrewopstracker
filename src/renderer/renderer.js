@@ -22,17 +22,14 @@ let depMarker     = null;
 const $ = (id) => document.getElementById(id);
 
 const btnConnect        = $('btn-connect');
-const btnToggleTracking = $('btn-toggle-tracking');
+const btnToggleTracking = $('btn-toggle-tracking'); // may be null before index.html is fully synced
 const depIcao           = $('dep-icao');
 const arrIcao           = $('arr-icao');
 const flightTimer       = $('flight-timer');
-const lastUpdate        = $('last-update');
 const versionTag        = $('version-tag');
 const mapCoords         = $('map-coords');
 const eventLog          = $('event-log');
-const completeBanner    = $('flight-complete-banner');
-const bannerTitle       = $('banner-title');
-const bannerDetail      = $('banner-detail');
+const debriefCard       = $('debrief-card');
 const settingsOverlay   = $('settings-overlay');
 
 // ── Phase order + mapping ──────────────────────────────────────────────────
@@ -214,7 +211,7 @@ function setSimStatus(status, message) {
       btnConnect.textContent = '⏹';
       btnConnect.title       = 'Disconnect from MSFS';
       btnConnect.className   = 'title-action-btn connected';
-      btnToggleTracking.disabled = false;
+      if (btnToggleTracking) btnToggleTracking.disabled = false;
       state.simConnected = true;
       $('sync-spinner').style.display = 'block';
       $('status-text').textContent = 'Connected — SimConnect active';
@@ -227,7 +224,7 @@ function setSimStatus(status, message) {
       btnConnect.textContent = '✕';
       btnConnect.title       = 'Cancel';
       btnConnect.className   = 'title-action-btn';
-      btnToggleTracking.disabled = true;
+      if (btnToggleTracking) btnToggleTracking.disabled = true;
       state.simConnected = false;
       $('sync-spinner').style.display = 'block';
       $('status-text').textContent = 'Connecting to Microsoft Flight Simulator…';
@@ -240,7 +237,7 @@ function setSimStatus(status, message) {
       btnConnect.textContent = '⚡';
       btnConnect.title       = 'Retry connection';
       btnConnect.className   = 'title-action-btn';
-      btnToggleTracking.disabled = true;
+      if (btnToggleTracking) btnToggleTracking.disabled = true;
       state.simConnected = false;
       $('sync-spinner').style.display = 'none';
       $('status-text').textContent = message || 'MSFS not running or SimConnect unavailable';
@@ -251,7 +248,7 @@ function setSimStatus(status, message) {
       btnConnect.textContent = '⚡';
       btnConnect.title       = 'Connect to MSFS';
       btnConnect.className   = 'title-action-btn';
-      btnToggleTracking.disabled = true;
+      if (btnToggleTracking) btnToggleTracking.disabled = true;
       state.simConnected = false;
       $('sync-spinner').style.display = 'none';
       $('status-text').textContent = 'Not connected to MSFS';
@@ -308,32 +305,46 @@ function phaseDisplayName(phase) {
 function updateMetrics(d) {
   if (!d) return;
 
-  $('m-altitude').innerHTML = `${d.altitude.toLocaleString()}<span class="metric-unit">ft</span>`;
-  $('m-ias').innerHTML      = `${d.ias}<span class="metric-unit">kt</span>`;
+  const elAlt  = $('d-alt');
+  if (elAlt)  elAlt.textContent  = d.altitude.toLocaleString();
 
-  const vsColor = d.vs > 0 ? '#6ee7b7' : d.vs < -800 ? '#f87171' : '#fcd34d';
-  $('m-vs').style.color = vsColor;
-  $('m-vs').innerHTML   = `${d.vs > 0 ? '+' : ''}${d.vs.toLocaleString()}<span class="metric-unit">fpm</span>`;
+  const elIas  = $('d-ias');
+  if (elIas)  elIas.textContent  = String(d.ias);
 
-  $('m-hdg').innerHTML  = `${String(d.heading).padStart(3, '0')}<span class="metric-unit">°</span>`;
-  $('m-gs').innerHTML   = `${d.groundSpeed}<span class="metric-unit">kt</span>`;
-  $('m-fuel').innerHTML = `${Math.round(d.fuelGallons).toLocaleString()}<span class="metric-unit">gal</span>`;
+  const elVs   = $('d-vs');
+  if (elVs) {
+    elVs.style.color = d.vs > 0 ? '#6ee7b7' : d.vs < -800 ? '#f87171' : '#fcd34d';
+    elVs.textContent = `${d.vs > 0 ? '+' : ''}${d.vs.toLocaleString()}`;
+  }
 
-  const gColor = d.gForce > 2 ? '#f87171' : d.gForce > 1.5 ? '#fcd34d' : 'inherit';
-  $('m-gforce').style.color = gColor;
-  $('m-gforce').innerHTML   = `${d.gForce.toFixed(2)}<span class="metric-unit">G</span>`;
+  const elHdg  = $('d-hdg');
+  if (elHdg)  elHdg.textContent  = `${String(Math.round(d.heading)).padStart(3, '0')}°`;
 
-  const gear  = d.gearDown ? '⚙ Gear↓' : '⚙ Gear↑';
-  const flaps = d.flapsIndex > 0 ? `Flaps ${d.flapsIndex}` : 'Flaps 0';
-  const ap    = d.autopilot ? '🟢 AP' : 'AP Off';
-  $('m-systems').innerHTML =
-    `<span style="font-size:10px; color:rgba(255,255,255,0.5);">${gear} · ${flaps} · ${ap}</span>`;
+  const elGs   = $('d-gs');
+  if (elGs)   elGs.textContent   = String(Math.round(d.groundSpeed));
 
-  mapCoords.textContent =
-    `${d.lat.toFixed(4)}°${d.lat >= 0 ? 'N' : 'S'} ${Math.abs(d.lon).toFixed(4)}°${d.lon >= 0 ? 'E' : 'W'}`;
+  const elFuel = $('d-fuel');
+  if (elFuel) elFuel.textContent = Math.round(d.fuelGallons).toLocaleString();
 
-  lastUpdate.textContent =
-    `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+  const elGf   = $('d-gforce');
+  if (elGf) {
+    elGf.style.color = d.gForce > 2 ? '#f87171' : d.gForce > 1.5 ? '#fcd34d' : 'inherit';
+    elGf.textContent = d.gForce != null ? d.gForce.toFixed(2) : '—';
+  }
+
+  const elGear  = $('sys-gear');
+  if (elGear)  elGear.textContent  = d.gearDown ? '⚙ Gear↓' : '⚙ Gear↑';
+
+  const elFlaps = $('sys-flaps');
+  if (elFlaps) elFlaps.textContent = d.flapsIndex > 0 ? `Flaps ${d.flapsIndex}` : 'Flaps 0';
+
+  const elAp    = $('sys-ap');
+  if (elAp)    elAp.textContent    = d.autopilot ? '🟢 AP' : 'AP Off';
+
+  if (mapCoords) {
+    mapCoords.textContent =
+      `${d.lat.toFixed(4)}°${d.lat >= 0 ? 'N' : 'S'} ${Math.abs(d.lon).toFixed(4)}°${d.lon >= 0 ? 'E' : 'W'}`;
+  }
 
   // Update the Leaflet map with current position + heading
   updateMap(d);
@@ -388,38 +399,69 @@ async function saveSettings() {
   addEvent('info', 'Settings saved');
 }
 
-// ── Flight complete banner ─────────────────────────────────────────────────
+// ── Grade computation ──────────────────────────────────────────────────────
+function computeGrade(record) {
+  const lr = Math.abs(record.landingRate ?? -9999);
+  if (lr <= 100) return 'A';
+  if (lr <= 200) return 'B';
+  if (lr <= 350) return 'C';
+  if (lr <= 500) return 'D';
+  return 'F';
+}
+
+// ── Flight debrief card ────────────────────────────────────────────────────
 function showCompleteBanner(record) {
   state.pendingFlight = record;
+  if (!debriefCard) return;
 
-  const dep = record.departure || '—';
-  const arr = record.arrival   || '—';
-  const dur = record.duration  || 0;
-  const h   = Math.floor(dur / 60);
-  const m   = dur % 60;
-  const lr  = record.landingRate ? `${record.landingRate} fpm` : '—';
+  const dep  = record.departure || '—';
+  const arr  = record.arrival   || '—';
+  const dur  = record.duration  || 0;
+  const h    = Math.floor(dur / 60);
+  const m    = dur % 60;
+  const lr   = record.landingRate != null ? `${record.landingRate} fpm` : '—';
+  const gf   = record.maxGForce  != null ? `${record.maxGForce.toFixed(2)}G` : '—';
+  const zone = record.touchdownZoneHit ? '✅ In Zone' : record.touchdownZoneHit === false ? '❌ Off Zone' : '—';
+  const bounces = record.bounces ?? 0;
+  const grade   = computeGrade(record);
 
-  bannerTitle.textContent  = `Flight Complete: ${dep} → ${arr}`;
-  bannerDetail.textContent =
-    `Duration: ${h}h ${m}m · Landing Rate: ${lr} · Max Alt: ${(record.maxAltitude || 0).toLocaleString()} ft`;
+  const setText = (id, val) => { const el = $(id); if (el) el.textContent = val; };
+  setText('db-route',  `${dep} → ${arr}`);
+  setText('db-sub',    `${h}h ${m}m · ${record.aircraft || 'UNKN'}`);
+  setText('db-lr',     lr);
+  setText('db-gforce', gf);
+  setText('db-zone',   zone);
+  setText('db-bounce', bounces);
 
-  completeBanner.classList.add('show');
+  const elGrade = $('db-grade');
+  if (elGrade) {
+    elGrade.textContent = grade;
+    elGrade.className   = `debrief-grade grade-${grade.toLowerCase()}`;
+  }
+
+  // Also update the in-flight grade badge in the flight card header
+  const gradeBadge = $('grade-badge');
+  if (gradeBadge) {
+    gradeBadge.textContent    = grade;
+    gradeBadge.style.display  = 'inline-flex';
+  }
+
+  debriefCard.style.display = 'block';
+  debriefCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function submitFlight() {
   if (!state.pendingFlight) return;
   const btn = $('btn-submit-flight');
-  btn.disabled     = true;
-  btn.textContent  = 'Submitting…';
+  if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
 
   const result = await window.tracker.submitFlight(state.pendingFlight);
   if (result.success) {
     addEvent('complete', `Flight ${state.pendingFlight.departure || '?'} → ${state.pendingFlight.arrival || '?'} logged`);
-    completeBanner.classList.remove('show');
+    if (debriefCard) debriefCard.style.display = 'none';
     state.pendingFlight = null;
   } else {
-    btn.disabled    = false;
-    btn.textContent = '▶ Retry Submit';
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Retry Submit'; }
     addEvent('error', `Submit failed: ${result.error}`);
   }
 }
@@ -453,10 +495,12 @@ window.tracker.on('simconnect:status', ({ state: s, message, info }) => {
   } else if (s === 'disconnected') {
     addEvent('info', 'SimConnect disconnected');
     setPhase('idle');
-    ['m-altitude','m-ias','m-vs','m-hdg','m-gs','m-fuel','m-gforce'].forEach(id => {
-      $(id).innerHTML = '—';
+    ['d-alt','d-ias','d-vs','d-hdg','d-gs','d-fuel','d-gforce'].forEach(id => {
+      const el = $(id); if (el) { el.textContent = '—'; el.style.color = ''; }
     });
-    $('m-systems').innerHTML = '—';
+    ['sys-gear','sys-flaps','sys-ap'].forEach(id => {
+      const el = $(id); if (el) el.textContent = '—';
+    });
     state.routePoints = [];
     resetMap();
   } else if (s === 'error') {
@@ -539,20 +583,22 @@ btnConnect.addEventListener('click', () => {
   }
 });
 
-btnToggleTracking.addEventListener('click', () => {
-  if (!window.tracker) return;
-  if (state.tracking) {
-    state.tracking = false;
-    btnToggleTracking.innerHTML = '&#9654; Start Tracking';
-    window.tracker.stopTracking();
-    addEvent('info', 'Tracking stopped manually');
-  } else {
-    state.tracking = true;
-    btnToggleTracking.innerHTML = '&#9646;&#9646; Stop Tracking';
-    window.tracker.startTracking();
-    addEvent('info', 'Tracking started');
-  }
-});
+if (btnToggleTracking) {
+  btnToggleTracking.addEventListener('click', () => {
+    if (!window.tracker) return;
+    if (state.tracking) {
+      state.tracking = false;
+      btnToggleTracking.innerHTML = '&#9654; Start Tracking';
+      window.tracker.stopTracking();
+      addEvent('info', 'Tracking stopped manually');
+    } else {
+      state.tracking = true;
+      btnToggleTracking.innerHTML = '&#9646;&#9646; Stop Tracking';
+      window.tracker.startTracking();
+      addEvent('info', 'Tracking started');
+    }
+  });
+}
 
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-settings-close').addEventListener('click', closeSettings);
@@ -570,11 +616,16 @@ $('btn-sign-out').addEventListener('click', async () => {
   }
 });
 
-$('btn-submit-flight').addEventListener('click', submitFlight);
-$('btn-dismiss-banner').addEventListener('click', () => {
-  completeBanner.classList.remove('show');
-  state.pendingFlight = null;
-});
+const btnSubmitFlight = $('btn-submit-flight');
+if (btnSubmitFlight) btnSubmitFlight.addEventListener('click', submitFlight);
+
+const btnDismissDebrief = $('btn-dismiss-debrief');
+if (btnDismissDebrief) {
+  btnDismissDebrief.addEventListener('click', () => {
+    if (debriefCard) debriefCard.style.display = 'none';
+    state.pendingFlight = null;
+  });
+}
 
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) closeSettings();

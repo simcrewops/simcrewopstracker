@@ -204,10 +204,11 @@ class FlightTracker extends EventEmitter {
 
       case PHASE.PRE_FLIGHT:
         if (enginesOn && d.onGround) {
-          this._blockOutTime  = Date.now();
-          this._departureIcao = this._airports.nearest(d.lat, d.lon);
-          this._fuelAtStart   = d.fuelGallons;
+          this._blockOutTime = Date.now();
+          this._fuelAtStart  = d.fuelGallons;
           this._resetFlightRecord(/* keepBlockOut= */ true);
+          // Must assign AFTER _resetFlightRecord() because that method clears _departureIcao
+          this._departureIcao = this._airports.nearest(d.lat, d.lon);
           this._setPhase(PHASE.TAXI);
         }
         break;

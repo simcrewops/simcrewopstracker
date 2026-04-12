@@ -25,6 +25,7 @@
         <span id="conn-label">Disconnected</span>
       </div>
       <button class="title-action-btn" id="btn-connect" title="Connect to MSFS">⚡</button>
+      <button class="title-action-btn" id="btn-toggle-tracking" title="Start/Stop Tracking" disabled>&#9654;</button>
       <button class="title-action-btn" id="btn-settings" title="Settings">&#9881;</button>
       <div id="titlebar-controls">
         <button class="title-btn" id="btn-minimize" title="Minimize">&#x2212;</button>
@@ -86,7 +87,7 @@
           <div class="phase-dot"></div>
           <div class="phase-name">Taxi Out</div>
         </div>
-        <div class="phase" id="ph-takeoff_roll">
+        <div class="phase" id="ph-takeoff">
           <div class="phase-dot"></div>
           <div class="phase-name">Takeoff</div>
         </div>
@@ -147,6 +148,10 @@
         <div class="data-item">
           <div class="data-value" id="d-fuel">—</div>
           <div class="data-unit">Fuel (gal)</div>
+        </div>
+        <div class="data-item">
+          <div class="data-value" id="d-gforce">—</div>
+          <div class="data-unit">G-Force</div>
         </div>
       </div>
       <!-- Systems strip -->

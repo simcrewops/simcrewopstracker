@@ -334,6 +334,11 @@ function setupFlightTrackerListeners() {
       }
     }
   });
+
+  // Wire high-frequency approach polling to SimConnect
+  flightTracker.on('highFreq', ({ enabled }) => {
+    if (simManager) simManager.setHighFreqMode(enabled);
+  });
 }
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
