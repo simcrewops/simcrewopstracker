@@ -361,7 +361,9 @@ class FlightTracker extends EventEmitter {
         this._landingLightsViolation = true;
       }
     }
-    if ((phase === PHASE.DESCENT || phase === PHASE.APPROACH || phase === PHASE.LANDING)) {
+    // Landing lights must be ON below FL180 during descent and approach.
+    // LANDING (rollout) is excluded — pilot correctly turns them off after touchdown.
+    if (phase === PHASE.DESCENT || phase === PHASE.APPROACH) {
       if (d.altitude < FL180_FT && !d.lightLanding) {
         this._landingLightsViolation = true;
       }
