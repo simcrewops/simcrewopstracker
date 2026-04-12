@@ -1,6 +1,7 @@
 'use strict';
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const Store = require('electron-store');
 
@@ -139,6 +140,7 @@ async function createAuthWindow() {
     let attempts = 0;
     const maxAttempts = 10;
     const tryCapture = async () => {
+      if (isQuitting) return;
       attempts++;
       await captureAuthState();
       if (!authState.isSignedIn && attempts < maxAttempts) {
@@ -591,6 +593,38 @@ app.on('ready', async () => {
   createWindow();
   createTray();
 
+  // ── Auto-updater ──────────────────────────────────────────────────────────
+  if (app.isPackaged) {
+    autoUpdater.autoDownload        = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on('update-downloaded', (info) => {
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      const opts = {
+        type: 'info',
+        title: 'Update Ready',
+        message: `SimCrewOps Tracker v${info.version} has been downloaded.\nRestart now to apply the update.`,
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      };
+      (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).then(({ response }) => {
+        if (response === 0) {
+          isQuitting = true;
+          autoUpdater.quitAndInstall(false, true);
+        }
+      });
+    });
+
+    autoUpdater.on('error', (err) => {
+      console.error('[AutoUpdater] Error:', err.message);
+    });
+
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      console.warn('[AutoUpdater] Update check failed:', err.message);
+    });
+  }
+
   // Load the hidden auth window early so Clerk can restore a persisted session
   await createAuthWindow();
 
@@ -622,8 +656,11 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  if (dataWatchdog)      { clearInterval(dataWatchdog);      dataWatchdog = null; }
   if (simManager) simManager.disconnect();
+  if (authWindow && !authWindow.isDestroyed()) { authWindow.destroy(); authWindow = null; }
+  if (tray)  { tray.destroy();  tray = null; }
 });
 
 // Prevent multiple instances

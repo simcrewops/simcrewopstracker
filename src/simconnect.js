@@ -66,7 +66,7 @@ class SimConnectManager extends EventEmitter {
       // Store for use by setHighFreqMode()
       this._SimConnectPeriod = SimConnectPeriod;
 
-      // Try MSFS 2024 (FSX_SP2) first, fall back to FSX_SP2 which covers 2020 too
+      // KittyHawk is required for MSFS 2020 and 2024 — FSX_SP2 is rejected by both.
       const { recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.KittyHawk);
       this._handle = handle;
       this._connected = true;
@@ -161,6 +161,7 @@ class SimConnectManager extends EventEmitter {
     } catch (err) {
       this._connected = false;
       this._handle    = null;
+      console.error('[SimConnect] Raw connection error:', err);
       const msg = this._friendlyError(err);
       this.emit('error', new Error(msg));
       console.error('[SimConnect] Connection failed:', msg);
