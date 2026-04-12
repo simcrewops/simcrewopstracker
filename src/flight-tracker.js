@@ -774,7 +774,11 @@ class FlightTracker extends EventEmitter {
     // High-frequency polling near landing
     if (phase === PHASE.APPROACH) {
       this.emit('highFreq', { enabled: true });
-    } else if (phase === PHASE.POST_FLIGHT || phase === PHASE.TAXI) {
+    } else if (phase === PHASE.POST_FLIGHT || phase === PHASE.TAXI ||
+               phase === PHASE.CLIMB      || phase === PHASE.AIRBORNE ||
+               phase === PHASE.CRUISE     || phase === PHASE.DESCENT) {
+      // Disable high-freq whenever we leave the approach/landing window,
+      // including on a go-around (APPROACH → CLIMB).
       this.emit('highFreq', { enabled: false });
     }
   }
