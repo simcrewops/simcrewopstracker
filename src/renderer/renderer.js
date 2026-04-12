@@ -600,6 +600,23 @@ if (btnToggleTracking) {
   });
 }
 
+// ── Map toggle ─────────────────────────────────────────────────────────────
+(function () {
+  const btnMapToggle = $('btn-map-toggle');
+  const mapWrapper   = $('map-wrapper');
+  if (!btnMapToggle || !mapWrapper) return;
+
+  btnMapToggle.addEventListener('click', () => {
+    const visible = mapWrapper.style.display !== 'none';
+    mapWrapper.style.display = visible ? 'none' : 'block';
+    btnMapToggle.classList.toggle('active', !visible);
+    // Leaflet needs an explicit size recalculation after becoming visible
+    if (!visible && leafletMap) {
+      setTimeout(() => leafletMap.invalidateSize(), 50);
+    }
+  });
+})();
+
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-settings-close').addEventListener('click', closeSettings);
 $('btn-settings-cancel').addEventListener('click', closeSettings);

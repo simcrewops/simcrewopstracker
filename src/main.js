@@ -32,6 +32,7 @@ let flightTracker = null;
 let apiClient = null;
 let isQuitting = false;
 let heartbeatInterval = null;
+let lastFlightData = null;   // kept current for live-map heartbeat payloads
 
 // ── Auth state ────────────────────────────────────────────────────────────────
 let authState = {
@@ -78,6 +79,9 @@ async function captureAuthState() {
       authState = { isSignedIn: true, user: result.user };
       store.set('userInfo', result.user);
       sendToRenderer('auth:stateChanged', authState);
+      // Fire a heartbeat immediately so the live map comes online without
+      // waiting up to 30 s for the next scheduled interval tick.
+      if (apiClient) apiClient.sendHeartbeat(lastFlightData);
     } else {
       authState = { isSignedIn: false, user: null };
       store.set('userInfo', null);
@@ -286,6 +290,7 @@ function setupSimConnectListeners() {
   });
 
   simManager.on('disconnected', () => {
+    lastFlightData = null;
     sendToRenderer('simconnect:status', { state: 'disconnected' });
     updateTrayMenu('idle');
     flightTracker.stop();
@@ -299,6 +304,7 @@ function setupSimConnectListeners() {
   });
 
   simManager.on('data', (flightData) => {
+    lastFlightData = flightData;
     flightTracker.update(flightData);
     sendToRenderer('flight:data', flightData);
   });
@@ -536,16 +542,19 @@ app.on('ready', async () => {
   // Load the hidden auth window early so Clerk can restore a persisted session
   await createAuthWindow();
 
-  // Heartbeat every 30 s — only when signed in
-  heartbeatInterval = setInterval(async () => {
+  // Heartbeat every 30 s — only when signed in. Position data is included so
+  // the web app live map can refresh the aircraft marker each tick without
+  // waiting for a full flight submission.
+  heartbeatInterval = setInterval(() => {
     if (apiClient && authState.isSignedIn) {
-      apiClient.sendHeartbeat();
+      apiClient.sendHeartbeat(lastFlightData);
     }
   }, 30_000);
 
-  // Send one immediately on startup
+  // Startup heartbeat — captureAuthState() is async so isSignedIn may still be
+  // false here; the immediate fire inside captureAuthState() handles that case.
   if (apiClient && authState.isSignedIn) {
-    apiClient.sendHeartbeat();
+    apiClient.sendHeartbeat(lastFlightData);
   }
 });
 

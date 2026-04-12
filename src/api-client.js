@@ -64,16 +64,28 @@ class ApiClient {
   }
 
   /**
-   * Send a heartbeat so the web app knows the tracker is running.
-   * Called periodically (~30 s) by main.js. Silently ignores errors.
+   * Send a heartbeat so the web app knows the tracker is running and can update
+   * the live map. Called periodically (~30 s) by main.js, and immediately after
+   * auth sign-in is detected. Position data is included when available so the
+   * server can refresh the live map marker without waiting for a flight submission.
+   * @param {Object|null} position - Current flight data from SimConnect (optional)
    */
-  async sendHeartbeat() {
+  async sendHeartbeat(position = null) {
     const token = await this._getToken();
     if (!token) return;
     try {
-      await this._request('POST', '/api/tracker/heartbeat', {}, token);
+      const body = {};
+      if (position) {
+        body.lat         = position.lat;
+        body.lon         = position.lon;
+        body.altitude    = position.altitude;
+        body.heading     = position.heading;
+        body.groundSpeed = position.groundSpeed;
+      }
+      await this._request('POST', '/api/tracker/heartbeat', body, token);
     } catch {
-      // intentionally silent
+      // intentionally silent — server may be unreachable; live map will
+      // mark the connection stale on its own timeout
     }
   }
 
