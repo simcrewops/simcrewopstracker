@@ -411,7 +411,7 @@ function applyFlightBriefing(flight) {
   setText('arr-icao',  arr.toUpperCase());
 
   // Aircraft
-  const ac = flight.aircraft || flight.aircraftType || flight.aircraft_type || '';
+  const ac = flight.aircraftType || flight.aircraft || flight.aircraft_type || '';
   setText('aircraft-tag', ac);
 
   // Phase badge → "Scheduled"

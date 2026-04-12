@@ -97,8 +97,10 @@ class ApiClient {
     const token = await this._getToken();
     if (!token) return null;
     try {
-      const response = await this._request('GET', '/api/flights/next', null, token);
-      return response.data ?? response ?? null;
+      // Returns the ordered queue; first upcoming leg is the next flight.
+      const queue = await this._request('GET', '/api/my-flights/queue', null, token);
+      if (!Array.isArray(queue)) return null;
+      return queue.find(leg => leg.status === 'upcoming') ?? null;
     } catch {
       return null; // no upcoming flight or endpoint unavailable — stay silent
     }
