@@ -308,19 +308,33 @@ function writeSimConnectCfg() {
 }
 
 // ── MSFS process detection ────────────────────────────────────────────────────
-// Both MSFS 2020 and MSFS 2024 (Store + Steam) run as FlightSimulator.exe.
+// Checks for any known MSFS executable. The list covers MSFS 2020 (Store +
+// Steam), MSFS 2024 (Steam), MSFS 2024 (Store/sandboxed builds), and any
+// internal build names seen in the wild. All comparisons are case-insensitive.
+//
+// IMPORTANT: this check is informational only — a false return does NOT block
+// the SimConnect attempt. Store sandboxing or renamed binaries may hide the
+// process from tasklist even when the sim is running.
+const MSFS_EXE_NAMES = [
+  'flightsimulator.exe',           // MSFS 2020 Store + Steam; MSFS 2024 Steam
+  'microsoft.flightsimulator.exe', // some MSFS 2024 Store builds
+  'fs2024.exe',
+  'limitless.exe',
+];
+
 function isMsfsRunning() {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
       resolve(true); // can't check on non-Windows; let the connect attempt proceed
       return;
     }
-    exec('tasklist /FI "IMAGENAME eq FlightSimulator.exe" /NH', (err, stdout) => {
+    exec('tasklist /NH', (err, stdout) => {
       if (err) {
         resolve(true); // tasklist failed — don't block the connect attempt
         return;
       }
-      resolve(stdout.toLowerCase().includes('flightsimulator.exe'));
+      const lower = stdout.toLowerCase();
+      resolve(MSFS_EXE_NAMES.some(name => lower.includes(name)));
     });
   });
 }
@@ -339,19 +353,17 @@ async function attemptSimConnect() {
   // listener on port 500 (bypasses Store named-pipe sandbox for MSFS 2024).
   writeSimConnectCfg();
 
-  // Check MSFS is actually running before attempting the connection so the
-  // user sees a clear "launch MSFS first" message instead of ECONNREFUSED.
+  // Check whether a known MSFS process is visible in tasklist. This is
+  // informational only — if the process isn't found we still attempt the
+  // SimConnect connection, because Store sandboxing or unusual build names
+  // can hide the process even when the sim is running.
   const msfsUp = await isMsfsRunning();
   if (!msfsUp) {
+    console.warn('[Tracker] MSFS process not detected in tasklist — attempting SimConnect connection anyway');
     sendToRenderer('simconnect:status', {
       state:   'error',
-      message: 'MSFS not detected — launch Microsoft Flight Simulator first, then click Connect.',
+      message: 'MSFS not detected — attempting connection anyway. If MSFS is running, this may resolve automatically.',
     });
-    sendToRenderer('flight:event', {
-      type:    'notice',
-      message: 'MSFS not detected. Start MSFS 2024, load a flight, then click Connect.',
-    });
-    return;
   }
 
   sendToRenderer('simconnect:status', { state: 'connecting' });

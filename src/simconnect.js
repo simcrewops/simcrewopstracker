@@ -32,7 +32,7 @@ const REQ_ID_ONCE     = 2; // one-shot ATC TYPE
 const REQ_ID_HIGHFREQ = 3; // ~100 ms approach data
 
 // ── Timing constants ──────────────────────────────────────────────────────────
-const RECONNECT_DELAY   = 5000; // ms between reconnect attempts
+const RECONNECT_DELAY   = 10000; // ms between reconnect attempts
 const SIMVAR_STAGGER_MS = 30;   // ms between addToDataDefinition calls (MSFS 2024 safety)
 const CORE_CONFIRM_MS   = 1000; // ms to wait for stability before Phase 2
 
