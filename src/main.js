@@ -4,9 +4,6 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = 
 const path = require('path');
 const Store = require('electron-store');
 
-// Allow requiring native modules packaged with app
-app.allowRendererProcessReuse = true;
-
 // ── Persistent settings store ─────────────────────────────────────────────────
 const store = new Store({
   name: 'simcrewops-tracker',
@@ -125,11 +122,14 @@ async function createAuthWindow() {
 
   // When the user finishes signing in, Clerk redirects to the dashboard.
   // We detect that, capture the session, then hide the window.
+  // Pass emitSignedOut=false: on the navigate event Clerk may not be fully
+  // initialised yet, so a failed capture should not wipe the persisted session.
+  // The did-finish-load retry loop owns the final signed-out decision.
   authWindow.webContents.on('did-navigate', async (_, url) => {
     const isAuthPage = url.includes('/sign-in') || url.includes('/sign-up') ||
                        url.includes('/login')   || url.includes('/register');
     if (!isAuthPage) {
-      await captureAuthState();
+      await captureAuthState(false);
       if (authState.isSignedIn && authWindow && !authWindow.isDestroyed()) {
         authWindow.hide();
       }
@@ -165,36 +165,11 @@ async function createAuthWindow() {
   await authWindow.loadURL(webAppUrl).catch(() => {});
 }
 
-// ── Create tray icon programmatically ─────────────────────────────────────────
-function createTrayIcon(status = 'idle') {
-  const colors = {
-    idle:        '#64748b',
-    connecting:  '#f59e0b',
-    connected:   '#10b981',
-    tracking:    '#3b82f6',
-    error:       '#ef4444',
-  };
-  const color = colors[status] || colors.idle;
-
-  const { createCanvas } = (() => {
-    try { return require('canvas'); } catch { return null; }
-  })() || {};
-
-  if (createCanvas) {
-    const canvas = createCanvas(16, 16);
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, 16, 16);
-    ctx.beginPath();
-    ctx.arc(8, 8, 7, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    return nativeImage.createFromBuffer(canvas.toBuffer('image/png'));
-  }
-
-  return nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAA' +
-    'JklEQVQ4jWNgYGD4z8BQDwAAAP//AwBDAAEA8P8AAAD//wMAQwABAPD/AAAAA=='
-  );
+// ── Tray icon (real logo, 16×16) ──────────────────────────────────────────────
+function createTrayIcon() {
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  const img = nativeImage.createFromPath(iconPath);
+  return img.isEmpty() ? nativeImage.createEmpty() : img.resize({ width: 16, height: 16 });
 }
 
 // ── Create main window ────────────────────────────────────────────────────────
@@ -216,7 +191,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
     },
-    icon: path.join(__dirname, '..', 'assets', 'icon.png'),
+    icon: path.join(__dirname, 'assets', 'icon.png'),
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -248,7 +223,7 @@ function createWindow() {
 
 // ── Create system tray ────────────────────────────────────────────────────────
 function createTray() {
-  const icon = createTrayIcon('idle');
+  const icon = createTrayIcon();
   tray = new Tray(icon);
   tray.setToolTip('SimCrewOps Tracker');
 
@@ -285,9 +260,6 @@ function updateTrayMenu(status) {
     },
   ]);
   tray.setContextMenu(menu);
-
-  const icon = createTrayIcon(status);
-  tray.setImage(icon);
 }
 
 // ── SimConnect connection management ──────────────────────────────────────────
@@ -374,48 +346,74 @@ function setupSimConnectListeners() {
 function _buildScoringInput(record) {
   return {
     preFlight: {
-      lightsChecked:   record.preFlight?.lightsChecked   ?? false,
-      parkingBrakeSet: record.preFlight?.parkingBrakeSet ?? false,
+      beaconOnBeforeTaxi: record.preFlight?.beaconOnBeforeTaxi ?? false,
     },
+
     taxiOut: {
-      maxTaxiSpeed:    record.taxiOut?.maxTaxiSpeed    ?? 0,
-      lightCompliance: record.taxiOut?.lightCompliance ?? 1.0,
+      maxSpeed:       record.taxiOut?.maxSpeed       ?? 0,
+      turnViolations: record.taxiOut?.turnViolations ?? 0,
+      lightFraction:  record.taxiOut?.lightFraction  ?? 1.0,
     },
+
     takeoff: {
-      vr:                  record.takeoff?.vr                  ?? null,
-      actualRotateSpeed:   record.takeoff?.rotateSpeed         ?? null,
-      bankAngleViolations: record.takeoff?.bankAngleViolations ?? 0,
+      vr:              record.takeoff?.vr              ?? null,
+      rotateSpeed:     record.takeoff?.rotateSpeed     ?? null,
+      landingLightsOn: record.takeoff?.landingLightsOn ?? false,
+      bankViolations:  record.takeoff?.bankViolations  ?? 0,
+      pitchViolations: record.takeoff?.pitchViolations ?? 0,
     },
+
     climb: {
       speedViolationsBelow10k: record.climb?.speedViolationsBelow10k ?? 0,
-      lightCompliance:         record.climb?.lightCompliance         ?? 1.0,
+      bankViolations:          record.climb?.bankViolations          ?? 0,
+      maxGForce:               record.climb?.maxGForce               ?? 0,
+      strobeCompliance:        record.climb?.strobeCompliance        ?? 1.0,
+      landingLightsViolation:  record.climb?.landingLightsViolation  ?? false,
     },
+
     cruise: {
-      maxMach:          record.cruise?.maxMach    ?? 0,
-      autopilotEngaged: record.cruise?.autopilotUsed ?? false,
+      altViolations:  record.cruise?.altViolations  ?? 0,
+      machRms:        record.cruise?.machRms        ?? 0,
+      bankViolations: record.cruise?.bankViolations ?? 0,
+      maxGForce:      record.cruise?.maxGForce      ?? 0,
     },
+
     descent: {
       speedViolationsBelow10k: record.descent?.speedViolationsBelow10k ?? 0,
+      bankViolations:          record.descent?.bankViolations          ?? 0,
+      pitchViolations:         record.descent?.pitchViolations         ?? 0,
+      maxGForce:               record.descent?.maxGForce               ?? 0,
     },
+
     approach: {
-      stabilizedAt1000ft: record.approach?.stabilizedAt1000ft ?? false,
+      gearDownBy1000:     record.approach?.gearDownBy1000     ?? false,
+      flapsSetBy1000:     record.approach?.flapsSetBy1000     ?? false,
+      stabilisedBelow500: record.approach?.stabilisedBelow500 ?? false,
       gsDeviationRms:     record.approach?.gsDeviationRms     ?? 0,
       vapp:               record.approach?.vapp               ?? null,
-      approachSpeed:      record.approach?.approachSpeed      ?? null,
+      avgApproachSpeed:   record.approach?.avgApproachSpeed   ?? null,
     },
+
     landing: {
-      touchdownVs:        record.touchdownVs        ?? 0,
-      touchdownGForce:    record.touchdownGForce    ?? 0,
-      touchdownPitch:     record.touchdownPitch     ?? 0,
-      bounces:            record.bounceCount        ?? record.bounces ?? 0,
-      tailStrike:         record.tailStrike         ?? false,
-      touchdownZoneHit:   record.touchdownZoneHit   ?? false,
-      centerlineDeviation: record.centerlineDeviation ?? 0,
+      touchdownVs:      record.landingRate      ?? 0,
+      touchdownGForce:  record.touchdownGForce  ?? 0,
+      touchdownPitch:   record.touchdownPitch   ?? 0,
+      bounces:          record.bounces          ?? 0,
+      tailStrike:       record.tailStrike       ?? false,
+      touchdownZoneHit: record.touchdownZoneHit ?? false,
     },
+
+    taxiIn: {
+      maxSpeed:          record.taxiIn?.maxSpeed          ?? 0,
+      turnViolations:    record.taxiIn?.turnViolations    ?? 0,
+      lightFraction:     record.taxiIn?.lightFraction     ?? 1.0,
+      landingLightsOff:  record.taxiIn?.landingLightsOff  ?? false,
+      strobesOff:        record.taxiIn?.strobesOff        ?? false,
+    },
+
     postFlight: {
-      taxiInMaxSpeed: record.taxiIn?.maxTaxiSpeed ?? 0,
-      enginesOff:     record.enginesOff           ?? false,
-      fuelUsed:       record.fuelUsed             ?? 0,
+      enginesOff: true, // reaching _completeFlight() means engines are off
+      fuelUsed:   record.fuelUsed ?? 0,
     },
   };
 }
