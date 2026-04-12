@@ -1,6 +1,6 @@
 {
   "name": "simcrewops-tracker",
-  "version": "1.0.33",
+  "version": "1.0.35",
   "description": "SimCrewOps Desktop Flight Tracker – connects MSFS via SimConnect and logs flights to simcrewops.com",
   "repository": {
     "type": "git",
@@ -15,7 +15,8 @@
     "dev": "NODE_ENV=development electron .",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
-    "build": "electron-builder --win --mac"
+    "build": "electron-builder --win --mac",
+    "make": "electron-builder --mac"
   },
   "dependencies": {
     "electron-store": "^8.2.0",

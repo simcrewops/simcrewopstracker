@@ -66,8 +66,14 @@ class SimConnectManager extends EventEmitter {
       // Store for use by setHighFreqMode()
       this._SimConnectPeriod = SimConnectPeriod;
 
-      // Try MSFS 2024 (FSX_SP2) first, fall back to FSX_SP2 which covers 2020 too
-      const { recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.KittyHawk);
+      // Try MSFS 2024 (KittyHawk) first; fall back to FSX_SP2 which covers MSFS 2020
+      let recvOpen, handle;
+      try {
+        ({ recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.KittyHawk));
+      } catch (kittyErr) {
+        console.warn('[SimConnect] KittyHawk failed, retrying with FSX_SP2:', kittyErr.message);
+        ({ recvOpen, handle } = await open('SimCrewOps Tracker', Protocol.FSX_SP2));
+      }
       this._handle = handle;
       this._connected = true;
       this._reconnecting = false;

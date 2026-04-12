@@ -58,7 +58,9 @@ async function getClerkToken() {
 }
 
 // ── Capture signed-in user info from the auth window ─────────────────────────
-async function captureAuthState() {
+// emitSignedOut: if false, suppresses the signed-out event/store-clear so that
+// intermediate retry attempts during Clerk hydration don't wipe a persisted session.
+async function captureAuthState(emitSignedOut = true) {
   if (!authWindow || authWindow.isDestroyed()) return;
   try {
     const result = await authWindow.webContents.executeJavaScript(`
@@ -86,7 +88,9 @@ async function captureAuthState() {
       // Fire a heartbeat immediately so the live map comes online without
       // waiting up to 30 s for the next scheduled interval tick.
       if (apiClient) apiClient.sendHeartbeat(lastFlightData);
-    } else {
+    } else if (emitSignedOut) {
+      // Only clear the persisted session and notify the renderer on the final
+      // retry attempt — intermediate misses are normal while Clerk hydrates.
       authState = { isSignedIn: false, user: null };
       store.set('userInfo', null);
       sendToRenderer('auth:stateChanged', authState);
@@ -135,13 +139,16 @@ async function createAuthWindow() {
 
   // Retry capturing auth state after load — Clerk needs a moment to bootstrap
   // its session from cookies/localStorage before window.Clerk.session is ready.
+  // Only emit the signed-out event on the final attempt so intermediate misses
+  // don't wipe a valid persisted session before Clerk has finished hydrating.
   authWindow.webContents.on('did-finish-load', () => {
     let attempts = 0;
     const maxAttempts = 10;
     const tryCapture = async () => {
       attempts++;
-      await captureAuthState();
-      if (!authState.isSignedIn && attempts < maxAttempts) {
+      const isFinal = attempts >= maxAttempts;
+      await captureAuthState(isFinal);
+      if (!authState.isSignedIn && !isFinal) {
         setTimeout(tryCapture, 500);
       }
     };

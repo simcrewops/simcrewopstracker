@@ -378,6 +378,12 @@ function updateMetrics(d) {
   const elAp    = $('sys-ap');
   if (elAp)    elAp.textContent    = d.autopilot ? '🟢 AP' : 'AP Off';
 
+  const elLights = $('sys-lights');
+  if (elLights) {
+    const lightsOn = d.lightBeacon || d.lightNav || d.lightStrobe || d.lightLanding || d.lightTaxi;
+    elLights.textContent = lightsOn ? 'Lights On' : 'Lights Off';
+  }
+
   if (mapCoords) {
     mapCoords.textContent =
       `${d.lat.toFixed(4)}°${d.lat >= 0 ? 'N' : 'S'} ${Math.abs(d.lon).toFixed(4)}°${d.lon >= 0 ? 'E' : 'W'}`;
