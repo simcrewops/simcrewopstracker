@@ -106,6 +106,8 @@ class FlightTracker extends EventEmitter {
     this._wheelsDownTime = null; // ms timestamp — touchdown
     this._blockInTime   = null; // ms timestamp — engines off after landing
 
+    this._resumedMidFlight = false; // true when tracker started mid-flight on restart
+
     // Touchdown zone detection
     this._touchdownVs          = 0;
     this._thresholdCrossedPos  = null; // { lat, lon } when AGL < THRESHOLD_AGL_FT in approach
@@ -149,6 +151,30 @@ class FlightTracker extends EventEmitter {
     this._active = false;
     this._setPhase(PHASE.IDLE);
     this._resetFlightRecord();
+  }
+
+  /**
+   * Called on startup when the sim is already airborne (mid-flight restart).
+   * Skips ground phases, seeds fuel from the current reading, and emits a
+   * notice so the UI can inform the user that pre-departure stats are missing.
+   */
+  resumeMidFlight(data) {
+    this._active          = true;
+    this._resumedMidFlight = true;
+    this._fuelAtStart     = data.fuelGallons;
+    this._wheelsUpTime    = Date.now(); // best approximation — actual liftoff was before restart
+
+    let targetPhase;
+    if (data.vs > VS_CLIMB_FPM) {
+      targetPhase = PHASE.CLIMB;
+    } else if (data.vs < VS_DESCENT_FPM) {
+      targetPhase = data.altitude < APPROACH_ALT_FT ? PHASE.APPROACH : PHASE.DESCENT;
+    } else {
+      targetPhase = PHASE.CRUISE;
+    }
+
+    this._setPhase(targetPhase);
+    this.emit('midFlightResume', { phase: targetPhase });
   }
 
   update(data) {
@@ -374,6 +400,7 @@ class FlightTracker extends EventEmitter {
       aircraft:         this._detectAircraftType(),
       departure:        this._departureIcao,
       arrival:          this._arrivalIcao,
+      resumedMidFlight: this._resumedMidFlight,
       duration:         durationMin,          // air time in minutes
       airTime:          airTimeHours,         // hours
       groundTime:       groundTimeHours,      // hours
@@ -410,6 +437,7 @@ class FlightTracker extends EventEmitter {
   _resetFlightRecord(keepBlockOut = false) {
     const savedBlockOut = keepBlockOut ? this._blockOutTime : null;
 
+    this._resumedMidFlight   = false;
     this._flightRecord       = null;
     this._routePoints        = [];
     this._lastRouteAt        = 0;

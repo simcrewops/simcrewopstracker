@@ -34,6 +34,7 @@ let apiClient = null;
 let isQuitting = false;
 let heartbeatInterval = null;
 let lastFlightData = null;   // kept current for live-map heartbeat payloads
+let _simStartCheckDone = false; // true after first data frame is inspected for mid-flight resume
 
 // ── Auth state ────────────────────────────────────────────────────────────────
 let authState = {
@@ -106,7 +107,8 @@ async function createAuthWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      // Use default session so Clerk cookies persist between app restarts
+      // Named persistent partition so Clerk cookies/localStorage survive restarts
+      partition: 'persist:clerk',
     },
   });
 
@@ -129,9 +131,19 @@ async function createAuthWindow() {
     }
   });
 
-  // Also try to capture state after the initial load (persisted session)
-  authWindow.webContents.on('did-finish-load', async () => {
-    await captureAuthState();
+  // Retry capturing auth state after load — Clerk needs a moment to bootstrap
+  // its session from cookies/localStorage before window.Clerk.session is ready.
+  authWindow.webContents.on('did-finish-load', () => {
+    let attempts = 0;
+    const maxAttempts = 10;
+    const tryCapture = async () => {
+      attempts++;
+      await captureAuthState();
+      if (!authState.isSignedIn && attempts < maxAttempts) {
+        setTimeout(tryCapture, 500);
+      }
+    };
+    setTimeout(tryCapture, 500);
   });
 
   authWindow.on('close', (e) => {
@@ -287,11 +299,14 @@ function setupSimConnectListeners() {
   simManager.on('connected', (info) => {
     sendToRenderer('simconnect:status', { state: 'connected', info });
     updateTrayMenu('connected');
-    flightTracker.start();
+    // Don't start the tracker yet — wait for the first data frame so we can
+    // detect a mid-flight restart before committing to PRE_FLIGHT.
+    _simStartCheckDone = false;
   });
 
   simManager.on('disconnected', () => {
     lastFlightData = null;
+    _simStartCheckDone = false;
     sendToRenderer('simconnect:status', { state: 'disconnected' });
     updateTrayMenu('idle');
     flightTracker.stop();
@@ -305,6 +320,16 @@ function setupSimConnectListeners() {
   });
 
   simManager.on('data', (flightData) => {
+    if (!_simStartCheckDone) {
+      _simStartCheckDone = true;
+      const enginesOn = flightData.eng1 || flightData.eng2;
+      const airborne  = (flightData.altAgl ?? 0) > 1000 || flightData.groundSpeed > 80;
+      if (enginesOn && airborne) {
+        flightTracker.resumeMidFlight(flightData);
+      } else {
+        flightTracker.start();
+      }
+    }
     lastFlightData = flightData;
     flightTracker.update(flightData);
     sendToRenderer('flight:data', flightData);
@@ -372,6 +397,15 @@ function setupFlightTrackerListeners() {
     if (phase.phase === 'tracking' || phase.phase === 'cruise') {
       updateTrayMenu('tracking');
     }
+  });
+
+  flightTracker.on('midFlightResume', ({ phase }) => {
+    sendToRenderer('flight:event', {
+      type:    'notice',
+      message: 'Resumed mid-flight — pre-departure stats unavailable',
+      phase,
+    });
+    updateTrayMenu('tracking');
   });
 
   flightTracker.on('takeoff', (event) => {
