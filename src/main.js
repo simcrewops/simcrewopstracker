@@ -14,6 +14,7 @@ const store = new Store({
     apiUrl: 'https://simcrewops.com',
     autoConnect: true,
     minimizeToTray: true,
+    mapboxToken: '',
     windowBounds: { width: 900, height: 680 },
     userInfo: null,
   },
@@ -424,12 +425,14 @@ function registerIpcHandlers() {
     apiUrl:         store.get('apiUrl'),
     autoConnect:    store.get('autoConnect'),
     minimizeToTray: store.get('minimizeToTray'),
+    mapboxToken:    store.get('mapboxToken'),
   }));
 
   ipcMain.handle('settings:save', (_, settings) => {
-    if (settings.apiUrl !== undefined)        store.set('apiUrl', settings.apiUrl);
-    if (settings.autoConnect !== undefined)   store.set('autoConnect', settings.autoConnect);
+    if (settings.apiUrl !== undefined)         store.set('apiUrl', settings.apiUrl);
+    if (settings.autoConnect !== undefined)    store.set('autoConnect', settings.autoConnect);
     if (settings.minimizeToTray !== undefined) store.set('minimizeToTray', settings.minimizeToTray);
+    if (settings.mapboxToken !== undefined)    store.set('mapboxToken', settings.mapboxToken);
 
     if (apiClient) {
       apiClient.setBaseUrl(store.get('apiUrl'));

@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com data:; img-src * data: blob:; connect-src 'self' https:;" />
+        content="default-src 'self'; script-src 'self' https://api.mapbox.com blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.mapbox.com; font-src 'self' https://fonts.gstatic.com data:; img-src * data: blob:; connect-src 'self' https: wss:; worker-src blob:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SimCrewOps Tracker</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.11.0/mapbox-gl.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -299,6 +299,12 @@
       </div>
 
       <div class="form-group">
+        <label>Mapbox Access Token</label>
+        <input class="form-input" type="password" id="inp-mapbox-token" placeholder="pk.eyJ1…" autocomplete="off" />
+        <p class="form-hint">Required for the live map. Get yours at mapbox.com/account/access-tokens</p>
+      </div>
+
+      <div class="form-group">
         <div class="form-toggle">
           <span>Auto-connect when MSFS is running</span>
           <label class="toggle-switch">
@@ -333,7 +339,7 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.11.0/mapbox-gl.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>

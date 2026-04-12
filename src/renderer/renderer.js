@@ -12,11 +12,10 @@ const state = {
   pendingFlight: null,
 };
 
-// ── Leaflet map state ──────────────────────────────────────────────────────
-let leafletMap    = null;
-let planeMarker   = null;
-let routePolyline = null;
-let depMarker     = null;
+// ── Mapbox map state ───────────────────────────────────────────────────────
+let mbMap       = null;   // mapboxgl.Map instance
+let planeMarker = null;   // mapboxgl.Marker for the aircraft
+let mapReady    = false;  // true after map 'load' event fires
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -48,99 +47,142 @@ const PHASE_TO_ID = {
   post_flight:  'taxi_in',
 };
 
-// ── Leaflet map ─────────────────────────────────────────────────────────────
-function makePlaneIcon(color, sizePx, rotationDeg, isUser) {
-  const glow = isUser
-    ? 'drop-shadow(0 0 6px rgba(34,255,102,0.9))'
-    : 'drop-shadow(0 0 3px rgba(0,0,0,0.8))';
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"
+// ── Mapbox GL map ──────────────────────────────────────────────────────────
+
+/** Build or update the DOM element used by the mapboxgl.Marker for the aircraft. */
+function makePlaneElement(sizePx, rotationDeg) {
+  const el = document.createElement('div');
+  el.style.cssText = `width:${sizePx}px;height:${sizePx}px;pointer-events:none;`;
+  el.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"
       width="${sizePx}" height="${sizePx}"
-      style="transform:rotate(${rotationDeg}deg);filter:${glow};display:block">
-    <g fill="${color}" stroke="rgba(0,0,0,0.4)" stroke-width="0.8">
+      style="transform:rotate(${rotationDeg}deg);
+             filter:drop-shadow(0 0 6px rgba(34,255,102,0.9));
+             display:block;transition:transform 0.4s ease;">
+    <g fill="#22ff66" stroke="rgba(0,0,0,0.4)" stroke-width="0.8">
       <path d="M20 2 C18.5 2 17.5 4 17.5 7 L17.5 15 L4 22 L4 25 L17.5 21
                L17.5 32 L13 35 L13 37 L20 35.5 L27 37 L27 35 L22.5 32
                L22.5 21 L36 25 L36 22 L22.5 15 L22.5 7 C22.5 4 21.5 2 20 2Z"/>
     </g>
   </svg>`;
-  return L.divIcon({
-    html: svg,
-    className: '',
-    iconSize:   [sizePx, sizePx],
-    iconAnchor: [sizePx / 2, sizePx / 2],
-  });
+  return el;
 }
 
-function initMap() {
-  if (typeof L === 'undefined') {
-    console.warn('[tracker] Leaflet not available — map disabled');
+function updatePlaneRotation(markerEl, rotationDeg) {
+  const svg = markerEl.querySelector('svg');
+  if (svg) svg.style.transform = `rotate(${rotationDeg}deg)`;
+}
+
+function initMap(mapboxToken) {
+  if (!mapboxToken) {
+    console.warn('[tracker] No Mapbox token — map disabled. Add one in Settings.');
+    return;
+  }
+  if (typeof mapboxgl === 'undefined') {
+    console.warn('[tracker] mapbox-gl not loaded — map disabled');
     return;
   }
 
-  leafletMap = L.map('map', {
-    center: [38, -98],
-    zoom: 4,
-    zoomControl: true,
+  mapboxgl.accessToken = mapboxToken;
+
+  mbMap = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/satellite-streets-v12',
+    center: [-98, 38],
+    zoom: 3,
     attributionControl: false,
+    logoPosition: 'bottom-right',
   });
 
-  // Dark satellite tile layer (matches V4 mockup)
-  // keepBuffer:1 and updateWhenIdle limit speculative tile fetches to reduce CPU/RAM churn.
-  L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 18, keepBuffer: 1, updateWhenIdle: true }
-  ).addTo(leafletMap);
+  mbMap.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
+
+  mbMap.on('load', () => {
+    mapReady = true;
+
+    // ── Route line ──────────────────────────────────────────────────────────
+    mbMap.addSource('route', {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } },
+    });
+    mbMap.addLayer({
+      id: 'route-line',
+      type: 'line',
+      source: 'route',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#f48223',
+        'line-width': 2.5,
+        'line-opacity': 0.8,
+        'line-dasharray': [2, 1.5],
+      },
+    });
+
+    // ── Departure marker ────────────────────────────────────────────────────
+    mbMap.addSource('dep-marker', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    });
+    mbMap.addLayer({
+      id: 'dep-circle',
+      type: 'circle',
+      source: 'dep-marker',
+      paint: {
+        'circle-radius': 6,
+        'circle-color': '#f48223',
+        'circle-opacity': 0.9,
+        'circle-stroke-width': 1.5,
+        'circle-stroke-color': '#fff',
+      },
+    });
+  });
 }
 
 function updateMap(data) {
-  if (!leafletMap || !data) return;
+  if (!mbMap || !mapReady || !data) return;
 
   const { lat, lon, heading } = data;
-  const icon = makePlaneIcon('#22ff66', 32, heading ?? 0, true);
+  const lngLat = [lon, lat];
 
-  if (planeMarker) {
-    planeMarker.setLatLng([lat, lon]);
-    planeMarker.setIcon(icon);
+  if (!planeMarker) {
+    const el = makePlaneElement(32, heading ?? 0);
+    planeMarker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+      .setLngLat(lngLat)
+      .addTo(mbMap);
   } else {
-    planeMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 })
-      .addTo(leafletMap);
+    planeMarker.setLngLat(lngLat);
+    updatePlaneRotation(planeMarker.getElement(), heading ?? 0);
   }
 
-  // Update route polyline
+  // Update route line
   if (state.routePoints.length > 1) {
-    const latlngs = state.routePoints.map(p => [p.lat, p.lon]);
-    if (routePolyline) {
-      routePolyline.setLatLngs(latlngs);
-    } else {
-      routePolyline = L.polyline(latlngs, {
-        color: '#f48223',
-        weight: 2.5,
-        opacity: 0.75,
-        dashArray: '8 5',
-      }).addTo(leafletMap);
-    }
+    mbMap.getSource('route').setData({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: state.routePoints.map(p => [p.lon, p.lat]) },
+    });
   }
 
-  // Smooth pan to current position
-  leafletMap.panTo([lat, lon], { animate: true, duration: 0.5 });
+  mbMap.panTo(lngLat, { duration: 500 });
 }
 
 function addDepMarker(lat, lon, icao) {
-  if (!leafletMap) return;
-  if (depMarker) leafletMap.removeLayer(depMarker);
-  depMarker = L.circleMarker([lat, lon], {
-    radius: 5,
-    color: '#f48223',
-    fillColor: '#f48223',
-    fillOpacity: 0.9,
-    weight: 1,
-  }).bindTooltip(icao, { direction: 'bottom', offset: [0, 6] }).addTo(leafletMap);
+  if (!mbMap || !mapReady) return;
+  mbMap.getSource('dep-marker').setData({
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: { icao },
+    }],
+  });
 }
 
 function resetMap() {
-  if (planeMarker)   { leafletMap.removeLayer(planeMarker);   planeMarker   = null; }
-  if (routePolyline) { leafletMap.removeLayer(routePolyline); routePolyline = null; }
-  if (depMarker)     { leafletMap.removeLayer(depMarker);     depMarker     = null; }
-  if (leafletMap)    { leafletMap.setView([38, -98], 4); }
+  if (!mbMap || !mapReady) return;
+  if (planeMarker) { planeMarker.remove(); planeMarker = null; }
+  mbMap.getSource('route')?.setData(
+    { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } }
+  );
+  mbMap.getSource('dep-marker')?.setData({ type: 'FeatureCollection', features: [] });
+  mbMap.flyTo({ center: [-98, 38], zoom: 3, duration: 800 });
 }
 
 // ── Timer ──────────────────────────────────────────────────────────────────
@@ -371,7 +413,8 @@ function applyAuthState(auth) {
 // ── Settings panel ─────────────────────────────────────────────────────────
 async function openSettings() {
   const s = window.tracker ? await window.tracker.loadSettings() : {};
-  $('inp-api-url').value        = s.apiUrl   || 'https://simcrewops.com';
+  $('inp-api-url').value        = s.apiUrl      || 'https://simcrewops.com';
+  $('inp-mapbox-token').value   = s.mapboxToken || '';
   $('chk-auto-connect').checked = !!s.autoConnect;
   $('chk-tray').checked         = !!s.minimizeToTray;
 
@@ -391,12 +434,13 @@ function closeSettings() {
 async function saveSettings() {
   const settings = {
     apiUrl:         $('inp-api-url').value.trim(),
+    mapboxToken:    $('inp-mapbox-token').value.trim(),
     autoConnect:    $('chk-auto-connect').checked,
     minimizeToTray: $('chk-tray').checked,
   };
   if (window.tracker) await window.tracker.saveSettings(settings);
   closeSettings();
-  addEvent('info', 'Settings saved');
+  addEvent('info', 'Settings saved — restart the app to apply map changes');
 }
 
 // ── Grade computation ──────────────────────────────────────────────────────
@@ -475,9 +519,9 @@ function switchTab(name) {
   if (tab)   tab.classList.add('active');
   if (panel) panel.classList.add('active');
 
-  // Invalidate map size when the map tab becomes visible
-  if (name === 'myflight' && leafletMap) {
-    setTimeout(() => leafletMap.invalidateSize(), 50);
+  // Recalculate map size when the map tab becomes visible
+  if (name === 'myflight' && mbMap) {
+    setTimeout(() => mbMap.resize(), 50);
   }
 }
 
@@ -610,9 +654,9 @@ if (btnToggleTracking) {
     const visible = mapWrapper.style.display !== 'none';
     mapWrapper.style.display = visible ? 'none' : 'block';
     btnMapToggle.classList.toggle('active', !visible);
-    // Leaflet needs an explicit size recalculation after becoming visible
-    if (!visible && leafletMap) {
-      setTimeout(() => leafletMap.invalidateSize(), 50);
+    // Mapbox needs an explicit size recalculation after becoming visible
+    if (!visible && mbMap) {
+      setTimeout(() => mbMap.resize(), 50);
     }
   });
 })();
@@ -681,8 +725,11 @@ async function init() {
     versionTag.textContent = `v${version}`;
   }
 
-  // Init Leaflet map (works in all contexts)
-  initMap();
+  // Init Mapbox map — token comes from persisted settings
+  const mapboxToken = window.tracker
+    ? (await window.tracker.loadSettings()).mapboxToken || ''
+    : '';
+  initMap(mapboxToken);
 }
 
 init().catch(console.error);
