@@ -38,18 +38,18 @@ jobs:
         env:
           npm_config_arch: x64
 
-      - name: Upload .exe to simcrewopstracker release
+      - name: Upload .exe to simcrewops release
         shell: python
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRACKER_REPO_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           import os, glob, json, urllib.request, urllib.parse
 
           token = os.environ['GH_TOKEN']
-          # Strip "tracker-" prefix: tracker-v1.0.29 -> v1.0.29
+          # Strip "tracker-" prefix: tracker-v1.0.30 -> v1.0.30
           tag = os.environ['TAG_NAME'].replace('tracker-', '', 1)
-          repo = 'simcrewops/simcrewopstracker'
+          repo = 'simcrewops/simcrewops'
 
           headers = {
               'Authorization': f'token {token}',
@@ -106,7 +106,7 @@ jobs:
           upload_req = urllib.request.Request(
               upload_url,
               data=data,
-              headers={**headers, 'Content-Type': 'application/json', 'Content-Type': 'application/octet-stream'},
+              headers={**headers, 'Content-Type': 'application/octet-stream'},
               method='POST'
           )
           with urllib.request.urlopen(upload_req) as resp:
