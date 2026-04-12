@@ -2,6 +2,9 @@
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
+const fs   = require('fs');
+const os   = require('os');
+const { exec } = require('child_process');
 const Store = require('electron-store');
 
 // ── Persistent settings store ─────────────────────────────────────────────────
@@ -264,6 +267,64 @@ function updateTrayMenu(status) {
   tray.setContextMenu(menu);
 }
 
+// ── SimConnect.cfg writer (TCP mode for MSFS Store sandboxing fix) ────────────
+// Writes SimConnect.cfg to all known MSFS config locations so the sim opens a
+// TCP listener on port 500.  This bypasses the named-pipe sandboxing that the
+// Microsoft Store edition of MSFS 2024 applies to non-Store apps.
+// Failures are silent — users without all three installs will hit missing dirs.
+function writeSimConnectCfg() {
+  if (process.platform !== 'win32') return;
+
+  const cfgContent = [
+    '[SimConnect]',
+    'Protocol=IPv4',
+    'Address=127.0.0.1',
+    'Port=500',
+    'MaxReceiveSize=4096',
+    'DisableNagle=0',
+  ].join('\r\n') + '\r\n';
+
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const appData      = process.env.APPDATA      || path.join(os.homedir(), 'AppData', 'Roaming');
+
+  const cfgPaths = [
+    // MSFS 2024 — Microsoft Store (Store sandbox, confirmed install type)
+    path.join(localAppData, 'Packages', 'Microsoft.Limitless_8wekyb3d8bbwe', 'LocalCache', 'SimConnect.cfg'),
+    // MSFS 2024 — Steam
+    path.join(appData, 'Microsoft Flight Simulator 2024', 'SimConnect.cfg'),
+    // MSFS 2020 — Steam (fallback for users on 2020)
+    path.join(appData, 'Microsoft Flight Simulator', 'SimConnect.cfg'),
+  ];
+
+  for (const cfgPath of cfgPaths) {
+    try {
+      fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+      fs.writeFileSync(cfgPath, cfgContent, 'utf8');
+      console.log(`[SimConnect] Wrote TCP cfg → ${cfgPath}`);
+    } catch (err) {
+      console.warn(`[SimConnect] Could not write cfg to ${cfgPath}: ${err.message}`);
+    }
+  }
+}
+
+// ── MSFS process detection ────────────────────────────────────────────────────
+// Both MSFS 2020 and MSFS 2024 (Store + Steam) run as FlightSimulator.exe.
+function isMsfsRunning() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve(true); // can't check on non-Windows; let the connect attempt proceed
+      return;
+    }
+    exec('tasklist /FI "IMAGENAME eq FlightSimulator.exe" /NH', (err, stdout) => {
+      if (err) {
+        resolve(true); // tasklist failed — don't block the connect attempt
+        return;
+      }
+      resolve(stdout.toLowerCase().includes('flightsimulator.exe'));
+    });
+  });
+}
+
 // ── SimConnect connection management ──────────────────────────────────────────
 function sendToRenderer(channel, data) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -271,8 +332,28 @@ function sendToRenderer(channel, data) {
   }
 }
 
-function attemptSimConnect() {
+async function attemptSimConnect() {
   if (!simManager) return;
+
+  // Write SimConnect.cfg to all MSFS config locations so the sim opens a TCP
+  // listener on port 500 (bypasses Store named-pipe sandbox for MSFS 2024).
+  writeSimConnectCfg();
+
+  // Check MSFS is actually running before attempting the connection so the
+  // user sees a clear "launch MSFS first" message instead of ECONNREFUSED.
+  const msfsUp = await isMsfsRunning();
+  if (!msfsUp) {
+    sendToRenderer('simconnect:status', {
+      state:   'error',
+      message: 'MSFS not detected — launch Microsoft Flight Simulator first, then click Connect.',
+    });
+    sendToRenderer('flight:event', {
+      type:    'notice',
+      message: 'MSFS not detected. Start MSFS 2024, load a flight, then click Connect.',
+    });
+    return;
+  }
+
   sendToRenderer('simconnect:status', { state: 'connecting' });
   simManager.connect();
 }

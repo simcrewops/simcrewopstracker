@@ -112,14 +112,19 @@ class SimConnectManager extends EventEmitter {
 
       // Try KittyHawk (MSFS 2020 / MSFS 2024) first, then FSX_SP2 as a fallback.
       // MSFS 2024 added support alongside KittyHawk but some configs need FSX_SP2.
+      // Connect via TCP (IPv4) to bypass Microsoft Store named-pipe sandboxing.
+      // MSFS 2024 Store edition blocks named-pipe connections from non-Store apps;
+      // TCP on port 500 works for both Store and Steam installs provided the
+      // SimConnect.cfg written at startup enables the IPv4 listener in the sim.
+      const tcpOpts = { host: '127.0.0.1', port: 500 };
       let recvOpen, handle, _lastProtoErr;
       for (const protocol of [Protocol.KittyHawk, Protocol.FSX_SP2]) {
         try {
-          ({ recvOpen, handle } = await open('SimCrewOps Tracker', protocol));
+          ({ recvOpen, handle } = await open('SimCrewOps Tracker', protocol, tcpOpts));
           break;
         } catch (e) {
           _lastProtoErr = e;
-          console.warn(`[SimConnect] Protocol ${protocol} failed: ${e.message}`);
+          console.warn(`[SimConnect] Protocol ${protocol} (TCP) failed: ${e.message}`);
         }
       }
       if (!handle) throw _lastProtoErr;
@@ -424,7 +429,7 @@ class SimConnectManager extends EventEmitter {
     const msg = err?.message ?? String(err);
     const code = err?.code ?? '';
     if (code === 'ECONNREFUSED' || msg.includes('ECONNREFUSED') || msg.includes('connect ECONNREFUSED')) {
-      return 'MSFS is not running or SimConnect is unavailable. Please start Microsoft Flight Simulator first.';
+      return 'MSFS is not running or SimConnect port 500 is unavailable. Start Microsoft Flight Simulator first, then reconnect. If MSFS is running, allow SimCrewOps Tracker through Windows Firewall (port 500 TCP).';
     }
     if (code === 'ENOENT' || msg.includes('ENOENT')) {
       return 'SimConnect DLL not found. Ensure MSFS 2024 is fully installed (check %LocalAppData%\\Packages\\Microsoft.Limitless_*\\LocalCache\\SimConnect.cfg).';
