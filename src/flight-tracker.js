@@ -214,6 +214,21 @@ class FlightTracker extends EventEmitter {
           // Must assign AFTER _resetFlightRecord() because that method clears _departureIcao
           this._departureIcao = this._airports.nearest(d.lat, d.lon);
           this._setPhase(PHASE.TAXI);
+        } else if (enginesOn && !d.onGround) {
+          // Tracker started mid-flight — initialise what we can and jump to the right phase
+          this._fuelAtStart  = d.fuelGallons;
+          this._wheelsUpTime = Date.now();
+          if (d.altitude > CRUISE_ALT_FT && d.vs > VS_DESCENT_FPM && d.vs < VS_CLIMB_FPM) {
+            this._setPhase(PHASE.CRUISE);
+          } else if (d.vs >= VS_CLIMB_FPM) {
+            this._setPhase(PHASE.CLIMB);
+          } else if (d.altitude < APPROACH_ALT_FT) {
+            this._setPhase(PHASE.APPROACH);
+          } else if (d.vs <= VS_DESCENT_FPM) {
+            this._setPhase(PHASE.DESCENT);
+          } else {
+            this._setPhase(PHASE.AIRBORNE);
+          }
         }
         break;
 

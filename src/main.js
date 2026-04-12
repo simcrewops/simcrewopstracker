@@ -34,6 +34,8 @@ let apiClient = null;
 let isQuitting = false;
 let heartbeatInterval = null;
 let lastFlightData = null;   // kept current for live-map heartbeat payloads
+let lastDataAt = 0;
+let dataWatchdog = null;
 
 // ── Auth state ────────────────────────────────────────────────────────────────
 let authState = {
@@ -288,9 +290,17 @@ function setupSimConnectListeners() {
     sendToRenderer('simconnect:status', { state: 'connected', info });
     updateTrayMenu('connected');
     flightTracker.start();
+    lastDataAt = Date.now();
+    dataWatchdog = setInterval(() => {
+      if (Date.now() - lastDataAt > 10_000) {
+        console.warn('[Tracker] No SimConnect data for 10s — sim may be paused or frozen');
+        sendToRenderer('simconnect:status', { state: 'stalled' });
+      }
+    }, 10_000);
   });
 
   simManager.on('disconnected', () => {
+    if (dataWatchdog) { clearInterval(dataWatchdog); dataWatchdog = null; }
     lastFlightData = null;
     sendToRenderer('simconnect:status', { state: 'disconnected' });
     updateTrayMenu('idle');
@@ -305,8 +315,13 @@ function setupSimConnectListeners() {
   });
 
   simManager.on('data', (flightData) => {
+    lastDataAt = Date.now();
     lastFlightData = flightData;
-    flightTracker.update(flightData);
+    try {
+      flightTracker.update(flightData);
+    } catch (err) {
+      console.error('[Tracker] flightTracker.update() threw:', err);
+    }
     sendToRenderer('flight:data', flightData);
   });
 
